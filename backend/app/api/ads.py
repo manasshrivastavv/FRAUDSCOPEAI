@@ -1,19 +1,22 @@
-import re
+import json
+import asyncio
 import uuid
 from typing import List, Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc, asc
 
 from app.database.session import get_db
 from app.models.models import (
     Advertisement, AnalysisResult, Evidence, ExtractedEntity,
-    Alert, AuditEvent, Case, case_advertisements
+    Alert, AuditEvent, Case, case_advertisements, Notification
 )
 from app.schemas.schemas import (
     AdAnalyzeRequest, AdSummarySchema, AdDetailSchema,
-    AdStatusUpdateRequest, AnalysisResultSchema, EvidenceSchema, EntitySchema
+    AdStatusUpdateRequest, AnalysisResultSchema, EvidenceSchema, EntitySchema,
+    IngestPostRequest
 )
 from app.services.text_preprocessing import normalize_text, calculate_content_hash, clean_url_string
 from app.services.entity_extraction import extract_entities
@@ -23,6 +26,8 @@ from app.services.similarity_service import check_exact_duplicate, find_near_dup
 from app.services.risk_scoring import calculate_composite_risk
 from app.services.ocr_service import extract_text_from_image
 from app.services.url_analysis import analyze_url
+from app.services.ingestion import ingestion_service, IngestedPost, SourceNotConfiguredException
+from app.services.broadcaster import broadcaster
 
 router = APIRouter(prefix="/ads", tags=["Advertisements"])
 
@@ -85,13 +90,16 @@ def analyze_advertisement(payload: AdAnalyzeRequest, db: Session = Depends(get_d
     )
 
     # Generate custom identifier e.g. AD-SCAN-A1B2
-    short_uuid = uuid.uuid4().hex[:6].upper()
-    custom_id = f"AD-SCAN-{short_uuid}"
+    if payload.external_id and not payload.external_id.startswith("AD-"):
+        custom_id = f"AD-{payload.external_id.replace(' ', '-')[:24]}"
+    else:
+        short_uuid = uuid.uuid4().hex[:6].upper()
+        custom_id = f"AD-SCAN-{short_uuid}"
 
     now = datetime.now(timezone.utc)
     detected_platform = detect_platform(raw_text, cleaned_url, payload.platform)
 
-    # Create Advertisement record (marked as LIVE_SCAN)
+    # Create Advertisement record (persisted with provenance)
     ad = Advertisement(
         custom_id=custom_id,
         original_text=raw_text,
@@ -99,8 +107,10 @@ def analyze_advertisement(payload: AdAnalyzeRequest, db: Session = Depends(get_d
         source_type=payload.source_type,
         submitted_url=cleaned_url,
         platform=detected_platform,
+        advertiser_name=payload.advertiser_name,
+        external_id=payload.external_id,
         is_demo=False,
-        data_source="LIVE_SCAN",
+        data_source=payload.data_source or "LIVE_SCAN",
         content_hash=content_hash,
         created_at=now,
         review_status="NEEDS_REVIEW" if risk_info["risk_level"] in ["HIGH", "MEDIUM"] else "NEW"
@@ -181,6 +191,15 @@ def analyze_advertisement(payload: AdAnalyzeRequest, db: Session = Depends(get_d
             created_at=now
         )
         db.add(alert)
+        db.add(Notification(
+            title=f"High Risk Alert: {custom_id}",
+            message=f"High risk score ({risk_info['risk_score']}/100) detected on {detected_platform}.",
+            type="HIGH_RISK_ALERT",
+            severity="HIGH",
+            is_read=False,
+            target_type="alert",
+            target_id=custom_id
+        ))
 
     # Audit Trail
     db.add(AuditEvent(
@@ -194,6 +213,32 @@ def analyze_advertisement(payload: AdAnalyzeRequest, db: Session = Depends(get_d
 
     db.commit()
     db.refresh(ad)
+
+    # Broadcast real-time live event to SSE subscribers
+    try:
+        broadcaster.broadcast_sync("NEW_FEED_RECORD", {
+            "id": ad.id,
+            "custom_id": ad.custom_id,
+            "original_text": ad.original_text,
+            "platform": ad.platform or "Unknown",
+            "advertiser_name": ad.advertiser_name,
+            "external_id": ad.external_id,
+            "submitted_url": ad.submitted_url,
+            "risk_score": analysis.risk_score if analysis else None,
+            "risk_level": analysis.risk_level if analysis else "LOW",
+            "review_status": ad.review_status,
+            "data_source": ad.data_source,
+            "is_demo": ad.is_demo,
+            "created_at": ad.created_at.isoformat() if ad.created_at else now.isoformat(),
+            "top_entities": [
+                {"entity_type": ed["entity_type"], "entity_value": ed["entity_value"]}
+                for ed in extracted[:3]
+            ],
+            "entities_count": len(extracted),
+            "cases_count": 0
+        })
+    except Exception:
+        pass
 
     # Find related ads (near duplicates and shared entities)
     near_dups = find_near_duplicates(db, norm_text, exclude_id=ad.id)
@@ -251,6 +296,8 @@ def analyze_advertisement(payload: AdAnalyzeRequest, db: Session = Depends(get_d
         source_type=ad.source_type,
         submitted_url=ad.submitted_url,
         platform=ad.platform or "Unknown",
+        advertiser_name=ad.advertiser_name,
+        external_id=ad.external_id,
         is_demo=ad.is_demo,
         data_source=ad.data_source,
         content_hash=ad.content_hash,
@@ -345,6 +392,7 @@ def list_advertisements(
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100),
     search: Optional[str] = Query(None),
+    platform: Optional[str] = Query(None),
     risk_level: Optional[str] = Query(None),
     review_status: Optional[str] = Query(None),
     is_demo: Optional[bool] = Query(None),
@@ -353,36 +401,53 @@ def list_advertisements(
     sort_order: str = Query("desc") # desc, asc
 ):
     """
-    Lists advertisement records with full pagination, search, risk filter, status filters,
-    and clear separation of demo dataset records vs live scans.
+    Lists advertisement records with full pagination, multi-field search, platform filtering,
+    risk filter, status filters, and clear separation of demo vs real data sources.
     """
     query = db.query(Advertisement).join(AnalysisResult, isouter=True)
 
-    if search:
-        search_pattern = f"%{search}%"
-        query = query.filter(
-            or_(
-                Advertisement.custom_id.ilike(search_pattern),
-                Advertisement.original_text.ilike(search_pattern),
-                Advertisement.submitted_url.ilike(search_pattern)
+    if search and search.strip():
+        s_clean = search.strip()
+        search_pattern = f"%{s_clean}%"
+        search_clauses = [
+            Advertisement.custom_id.ilike(search_pattern),
+            Advertisement.original_text.ilike(search_pattern),
+            Advertisement.submitted_url.ilike(search_pattern),
+            Advertisement.platform.ilike(search_pattern),
+            Advertisement.advertiser_name.ilike(search_pattern),
+            Advertisement.external_id.ilike(search_pattern),
+            AnalysisResult.risk_level.ilike(search_pattern),
+            Advertisement.entities.any(
+                or_(
+                    ExtractedEntity.entity_value.ilike(search_pattern),
+                    ExtractedEntity.normalized_value.ilike(search_pattern)
+                )
             )
-        )
+        ]
+        if s_clean.isdigit():
+            search_clauses.append(Advertisement.id == int(s_clean))
+        query = query.filter(or_(*search_clauses))
 
-    if risk_level:
+    if platform and platform.strip() and platform.lower() != "all":
+        query = query.filter(Advertisement.platform.ilike(f"%{platform.strip()}%"))
+
+    if risk_level and risk_level.strip() and risk_level.lower() != "all":
         query = query.filter(AnalysisResult.risk_level == risk_level.upper())
 
-    if review_status:
+    if review_status and review_status.strip() and review_status.lower() != "all":
         query = query.filter(Advertisement.review_status == review_status.upper())
 
     if is_demo is not None:
         query = query.filter(Advertisement.is_demo == is_demo)
 
-    if data_source:
+    if data_source and data_source.strip() and data_source.lower() != "all":
         query = query.filter(Advertisement.data_source == data_source)
 
     # Sorting
     if sort_by == "risk_score":
         order_col = AnalysisResult.risk_score
+    elif sort_by == "id":
+        order_col = Advertisement.id
     else:
         order_col = Advertisement.created_at
 
@@ -397,6 +462,10 @@ def list_advertisements(
 
     items = []
     for ad in ads:
+        top_ents = [
+            {"type": e.entity_type, "value": e.entity_value, "norm": e.normalized_value}
+            for e in ad.entities[:3]
+        ]
         items.append({
             "id": ad.id,
             "custom_id": ad.custom_id,
@@ -404,6 +473,8 @@ def list_advertisements(
             "source_type": ad.source_type,
             "submitted_url": ad.submitted_url,
             "platform": ad.platform or "Unknown",
+            "advertiser_name": ad.advertiser_name,
+            "external_id": ad.external_id,
             "is_demo": ad.is_demo,
             "data_source": ad.data_source or ("DATASET_IMPORT" if ad.is_demo else "LIVE_SCAN"),
             "risk_score": ad.analysis.risk_score if ad.analysis else None,
@@ -411,7 +482,8 @@ def list_advertisements(
             "review_status": ad.review_status,
             "created_at": ad.created_at,
             "entities_count": len(ad.entities),
-            "cases_count": len(ad.cases)
+            "cases_count": len(ad.cases),
+            "top_entities": top_ents
         })
 
     return {
@@ -421,6 +493,166 @@ def list_advertisements(
         "limit": limit,
         "pages": (total + limit - 1) // limit if limit > 0 else 1
     }
+
+@router.get("/sources", response_model=List[dict])
+def list_ingestion_sources(db: Session = Depends(get_db)):
+    """
+    Returns telemetry and authorization status for all intelligence source adapters
+    (Meta Ad Library, Telegram, Manual Submissions, Synthetic Datasets).
+    """
+    statuses = ingestion_service.get_sources_status(db)
+    return [s.model_dump() for s in statuses]
+
+@router.post("/ingest", response_model=AdDetailSchema)
+def ingest_post_endpoint(payload: IngestPostRequest, db: Session = Depends(get_db)):
+    """
+    Ingests an ad/post from an external stream, manual payload, or automated crawler.
+    Deduplicates and guarantees immediate database persistence.
+    """
+    post = IngestedPost(
+        content=payload.content,
+        platform=payload.platform,
+        advertiser_name=payload.advertiser_name,
+        external_id=payload.external_id,
+        submitted_url=payload.submitted_url,
+        source_type=payload.source_type,
+        data_source=payload.data_source,
+        is_demo=payload.is_demo
+    )
+    ad = ingestion_service.ingest_post(db, post, actor="Analyst")
+    return get_advertisement_detail(str(ad.id), db)
+
+@router.post("/sync-source/{adapter_id}")
+def sync_source_feed(adapter_id: str, query: Optional[str] = Query(None), limit: int = Query(20, ge=1, le=50), db: Session = Depends(get_db)):
+    """
+    Triggers an on-demand poll from an external source adapter.
+    For unconfigured adapters (e.g. Meta pending token), returns informative diagnostic status.
+    """
+    adapter = ingestion_service.get_adapter(adapter_id)
+    if not adapter:
+        raise HTTPException(status_code=404, detail=f"Source adapter '{adapter_id}' not found.")
+    
+    if not adapter.is_configured:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Source adapter '{adapter.name}' is pending authorization or unconfigured. {adapter.get_status().auth_instructions}"
+        )
+
+    try:
+        posts = adapter.fetch_posts(query=query, limit=limit)
+        ingested_count = 0
+        for p in posts:
+            ingestion_service.ingest_post(db, p, actor=f"Sync:{adapter_id}")
+            ingested_count += 1
+        return {
+            "status": "success",
+            "adapter_id": adapter_id,
+            "fetched_count": len(posts),
+            "ingested_count": ingested_count,
+            "message": f"Successfully ingested {ingested_count} records from {adapter.name}."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to sync from {adapter.name}: {str(e)}")
+
+@router.get("/live-events")
+async def live_events_stream(request: Request):
+    """
+    Server-Sent Events (SSE) streaming endpoint.
+    Emits real-time live events to connected web clients as Telegram messages
+    or new surveillance advertisements are persisted.
+    """
+    async def event_generator():
+        q = broadcaster.subscribe()
+        try:
+            # Initial ping/connection ACK
+            yield 'event: connected\ndata: {"status": "listening"}\n\n'
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    item = await asyncio.wait_for(q.get(), timeout=12.0)
+                    yield f"event: {item['event']}\ndata: {json.dumps(item['data'])}\n\n"
+                except asyncio.TimeoutError:
+                    # Periodic heartbeat to keep proxy and browser connections alive
+                    yield f'event: ping\ndata: {{"timestamp": "{datetime.now(timezone.utc).isoformat()}"}}\n\n'
+        finally:
+            broadcaster.unsubscribe(q)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+@router.get("/live-status")
+def get_live_feed_status(db: Session = Depends(get_db)):
+    """
+    Lightweight endpoint returning latest record ID, total count,
+    and Telegram adapter status for live monitoring indicators.
+    """
+    total = db.query(Advertisement).count()
+    latest_ad = db.query(Advertisement).order_by(Advertisement.id.desc()).first()
+    tg_adapter = ingestion_service.get_adapter("telegram_feed")
+    tg_status = tg_adapter.get_status().model_dump() if tg_adapter else None
+
+    return {
+        "total_records": total,
+        "latest_ad_id": latest_ad.id if latest_ad else 0,
+        "latest_custom_id": latest_ad.custom_id if latest_ad else None,
+        "latest_created_at": latest_ad.created_at.isoformat() if latest_ad and latest_ad.created_at else None,
+        "telegram_status": tg_status
+    }
+
+@router.post("/telegram/poll")
+async def poll_telegram_channels(db: Session = Depends(get_db)):
+    """
+    Triggers an immediate poll of configured public Telegram channels,
+    ingests any newly detected messages, and returns count of saved records.
+    """
+    tg_adapter = ingestion_service.get_adapter("telegram_feed")
+    if not tg_adapter:
+        raise HTTPException(status_code=404, detail="Telegram source adapter not registered.")
+
+    if not tg_adapter.is_configured:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Telegram adapter not configured. {tg_adapter.get_status().auth_instructions}"
+        )
+
+    try:
+        posts = await tg_adapter.poll_channel_messages_async(limit_per_channel=10)
+        persisted = []
+        for post in posts:
+            ad = ingestion_service.ingest_post(db, post, actor="Telegram:Poller")
+            persisted.append(ad.id)
+
+        return {
+            "status": "success",
+            "fetched_count": len(posts),
+            "persisted_count": len(persisted),
+            "channels": tg_adapter.get_configured_channels(),
+            "message": f"Successfully checked Telegram channels. Ingested {len(persisted)} messages."
+        }
+    except SourceNotConfiguredException as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Telegram poll failed: {str(e)}")
+
+@router.post("/telegram/test-connection")
+async def test_telegram_connection():
+    """
+    Tests MTProto connection and authorization with Telegram servers.
+    Safely reports connection state, DC reachability, and authorization without exposing credentials.
+    """
+    tg_adapter = ingestion_service.get_adapter("telegram_feed")
+    if not tg_adapter:
+        raise HTTPException(status_code=404, detail="Telegram source adapter not registered.")
+
+    return await tg_adapter.test_connection_async()
 
 @router.get("/{id}", response_model=AdDetailSchema)
 def get_advertisement_detail(id: str, db: Session = Depends(get_db)):
@@ -513,6 +745,8 @@ def get_advertisement_detail(id: str, db: Session = Depends(get_db)):
         source_type=ad.source_type,
         submitted_url=ad.submitted_url,
         platform=ad.platform or "Unknown",
+        advertiser_name=ad.advertiser_name,
+        external_id=ad.external_id,
         is_demo=ad.is_demo,
         data_source=ad.data_source or ("DATASET_IMPORT" if ad.is_demo else "LIVE_SCAN"),
         content_hash=ad.content_hash,
@@ -580,3 +814,89 @@ def delete_advertisement(id: str, db: Session = Depends(get_db)):
     ))
     db.commit()
     return {"message": f"Advertisement {custom_id} deleted successfully."}
+
+# =====================================================================
+# DATASET IMPORT & LIVE FEED REPLAY ENDPOINTS
+# =====================================================================
+from app.schemas.schemas import ReplayStartRequest, ReplayStatusSchema
+from app.services.dataset_replay_service import dataset_replay_service
+from app.services.dataset_import_service import dataset_import_service
+
+@router.get("/replay/status", response_model=ReplayStatusSchema)
+def get_replay_status():
+    """Returns telemetry and operational state of the live dataset replay engine."""
+    return dataset_replay_service.get_status()
+
+@router.post("/replay/start", response_model=ReplayStatusSchema)
+async def start_replay(payload: Optional[ReplayStartRequest] = None):
+    """
+    Starts or resumes continuous live replay of forensic records
+    from the JSON/CSV dataset files into the Live Feed.
+    """
+    source = payload.source if payload else "both"
+    interval = payload.interval_seconds if payload else 3.0
+    loop = payload.loop if payload else False
+    try:
+        return await dataset_replay_service.start(source=source, interval_seconds=interval, loop=loop)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/replay/pause", response_model=ReplayStatusSchema)
+async def pause_replay():
+    """Pauses dataset replay at the current record index."""
+    return await dataset_replay_service.pause()
+
+@router.post("/replay/resume", response_model=ReplayStatusSchema)
+async def resume_replay():
+    """Resumes paused dataset replay."""
+    return await dataset_replay_service.resume()
+
+@router.post("/replay/stop", response_model=ReplayStatusSchema)
+async def stop_replay():
+    """Stops dataset replay."""
+    return await dataset_replay_service.stop()
+
+@router.post("/replay/restart", response_model=ReplayStatusSchema)
+async def restart_replay(payload: Optional[ReplayStartRequest] = None):
+    """Restarts dataset replay from record 0 without duplicating database items."""
+    source = payload.source if payload else None
+    interval = payload.interval_seconds if payload else None
+    return await dataset_replay_service.restart(source=source, interval_seconds=interval)
+
+@router.get("/dataset/info")
+def get_dataset_info():
+    """
+    Returns filesystem locations, schema, record counts, and provenance information
+    for the user's JSON and CSV datasets.
+    """
+    paths = dataset_import_service.locate_datasets()
+    records, stats = dataset_import_service.load_dataset(source_type="both")
+    sample = records[0] if records else None
+    return {
+        "paths": paths,
+        "stats": stats,
+        "sample": {
+            "event_id": sample.get("event_id") if sample else None,
+            "platform": sample.get("platform") if sample else None,
+            "text": sample.get("text")[:100] if sample and sample.get("text") else None,
+            "ground_truth": sample.get("ground_truth") if sample else None
+        } if sample else None
+    }
+
+@router.post("/dataset/import")
+def import_dataset(
+    source: str = Query(default="both", description="Dataset source: 'both', 'json', or 'csv'"),
+    db: Session = Depends(get_db)
+):
+    """
+    Idempotently imports all eligible records from the JSON/CSV datasets
+    into the database with ML scoring, entity extraction, and deduplication.
+    """
+    records, stats = dataset_import_service.load_dataset(source_type=source)
+    summary = dataset_import_service.import_records_to_db(db=db, records=records)
+    return {
+        "status": "success",
+        "source": source,
+        "dataset_stats": stats,
+        "import_summary": summary
+    }

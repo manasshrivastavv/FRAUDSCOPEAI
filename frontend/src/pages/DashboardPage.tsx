@@ -55,6 +55,7 @@ import { EvidenceDrawer } from '../components/investigation/EvidenceDrawer';
 import { MuleNetwork3D } from '../components/visualizations/MuleNetwork3D';
 import { ExtractedEntitiesModal } from '../components/investigation/ExtractedEntitiesModal';
 import { useLanguage } from '../context/LanguageContext';
+import { useAuth } from '../context/AuthContext';
 
 function formatRelativeTime(dateString: string): string {
   try {
@@ -76,6 +77,22 @@ function formatRelativeTime(dateString: string): string {
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const { t } = useLanguage();
+  const { user } = useAuth();
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    let salutation = 'Welcome';
+    if (hour >= 5 && hour < 12) salutation = 'Good morning';
+    else if (hour >= 12 && hour < 17) salutation = 'Good afternoon';
+    else if (hour >= 17 && hour < 22) salutation = 'Good evening';
+    else salutation = 'Welcome back';
+
+    const firstName = user?.full_name ? user.full_name.trim().split(' ')[0] : null;
+    if (firstName) {
+      return `${salutation}, ${firstName}!`;
+    }
+    return 'Welcome back!';
+  };
 
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [trends, setTrends] = useState<DashboardActivity[]>([]);
@@ -301,7 +318,7 @@ export const DashboardPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-[var(--border)]">
         <div>
           <h1 className="text-2xl sm:text-3xl lg:text-4xl font-serif font-bold text-[var(--text)] tracking-tight">
-            {t('dashboard.welcome_title', 'Welcome back, Investigator')}
+            {getGreeting()}
           </h1>
           <p className="text-sm sm:text-base text-[var(--muted)] mt-1.5 leading-relaxed">
             {t('dashboard.welcome_desc', 'Continuous surveillance feed tracking fraudulent investment campaigns and mule networks.')}

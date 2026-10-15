@@ -49,6 +49,12 @@ export interface EvidenceItem {
   created_at?: string;
 }
 
+export interface EntityChip {
+  entity_type: string;
+  entity_value: string;
+  normalized_value?: string;
+}
+
 export interface AdvertisementSummary {
   id: number;
   custom_id?: string;
@@ -62,10 +68,82 @@ export interface AdvertisementSummary {
   platform_detected?: string;
   is_demo?: boolean;
   data_source?: string;
+  raw_metadata?: string | null;
+  advertiser_name?: string | null;
+  external_id?: string | null;
+  top_entities?: EntityChip[];
   created_at: string;
   entities_count: number;
   cases_count: number;
 }
+
+export interface ReplayStatus {
+  status: 'IDLE' | 'RUNNING' | 'PAUSED' | 'STOPPED' | 'COMPLETED' | string;
+  source: 'both' | 'json' | 'csv' | string;
+  interval_seconds: number;
+  total_records: number;
+  published_count: number;
+  remaining_count: number;
+  current_index: number;
+  loop: boolean;
+  last_event_time: string | null;
+  last_published_id: string | null;
+  errors: string[];
+}
+
+export interface ReplayStartPayload {
+  source?: 'both' | 'json' | 'csv';
+  interval_seconds?: number;
+  loop?: boolean;
+}
+
+export interface DatasetInfo {
+  paths: {
+    jsonl_path: string | null;
+    csv_path: string | null;
+  };
+  stats: {
+    json_file: string | null;
+    csv_file: string | null;
+    json_count: number;
+    csv_count: number;
+    total_raw: number;
+    unique_records: number;
+    cross_file_duplicates: number;
+  };
+  sample?: {
+    event_id: string | null;
+    platform: string | null;
+    text: string | null;
+    ground_truth: any;
+  } | null;
+}
+
+export interface SourceAdapterTelemetry {
+  adapter_id: string;
+  name: string;
+  platforms: string[];
+  status: 'READY' | 'ACTIVE' | 'PENDING_AUTHORIZATION' | 'CONFIGURED' | 'ERROR' | string;
+  description: string;
+  is_demo: boolean;
+  requires_auth: boolean;
+  auth_configured: boolean;
+  configured?: boolean;
+  last_sync: string | null;
+  items_synced: number;
+  error_message: string | null;
+  auth_instructions?: string | null;
+}
+
+export interface LiveFeedStatus {
+  total_records: number;
+  latest_ad_id: number;
+  latest_custom_id: string | null;
+  latest_created_at: string | null;
+  telegram_status: SourceAdapterTelemetry | null;
+}
+
+
 
 export interface AdvertisementDetail {
   id: number;
@@ -80,6 +158,9 @@ export interface AdvertisementDetail {
   platform_detected?: string;
   is_demo?: boolean;
   data_source?: string;
+  raw_metadata?: string | null;
+  external_id?: string | null;
+  advertiser_name?: string | null;
   risk_score?: number | null;
   risk_level?: 'LOW' | 'MEDIUM' | 'HIGH' | string | null;
   created_at: string;
@@ -261,7 +342,8 @@ export interface User {
   full_name: string;
   email: string;
   username: string;
-  role: 'Investigator' | 'Fraud Analyst' | 'Administrator' | string;
+  role: 'Investigator' | 'Fraud Analyst' | 'Developer' | 'Administrator' | string;
+  avatar_url?: string | null;
   is_active: boolean;
   created_at?: string;
   updated_at?: string;
@@ -277,13 +359,155 @@ export interface AuthResponse {
 export interface RegisterPayload {
   full_name: string;
   email: string;
-  username: string;
+  username?: string;
   password: string;
-  confirm_password: string;
-  role?: 'Investigator' | 'Fraud Analyst' | string;
+  confirm_password?: string;
+  role?: 'Investigator' | 'Fraud Analyst' | 'Developer' | string;
 }
 
 export interface LoginPayload {
-  username_or_email: string;
+  username_or_email?: string;
+  email?: string;
   password: string;
+}
+
+export interface NotificationItem {
+  id: number;
+  user_id?: number | null;
+  title: string;
+  message: string;
+  type: 'HIGH_RISK_ALERT' | 'CASE_UPDATE' | 'SCAN_COMPLETED' | 'SYSTEM' | string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO' | string;
+  is_read: boolean;
+  target_type?: 'case' | 'alert' | 'report' | 'scan' | string | null;
+  target_id?: string | null;
+  created_at: string;
+}
+
+export interface NotificationListResponse {
+  notifications: NotificationItem[];
+  total: number;
+  unread_count: number;
+}
+
+export interface ThreatIndicatorItem {
+  indicator_name: string;
+  observed_evidence: string;
+  why_it_matters: string;
+  severity: 'Critical' | 'High' | 'Medium' | 'Low' | 'Informational' | string;
+  evidence_source: string;
+  verification_status: 'Verified' | 'Model-Inferred' | 'Dataset-Provided' | 'Unknown' | string;
+  score_contribution?: number | null;
+}
+
+export interface AiModelAnalysis {
+  model_name: string;
+  model_version?: string | null;
+  prediction: string;
+  suspicious_probability?: number | null;
+  risk_score: number;
+  prediction_threshold?: number | null;
+  detected_patterns: Array<{ token: string; type: string; contribution: number }>;
+  important_limitations: string[];
+}
+
+export interface UrlDomainAnalysis {
+  hostname: string;
+  domain: string;
+  https_status: string;
+  url_length: number;
+  suspicious_symbols: string[];
+  is_ip_hostname: boolean;
+  subdomains: string[];
+  redirect_chain: string[];
+  dns_intelligence?: string | null;
+  external_reputation?: {
+    provider: string;
+    status: string;
+    checked_at?: string;
+  } | null;
+}
+
+export interface MessageAnalysis {
+  message_text: string;
+  urgency_or_threats: string[];
+  credential_or_payment_requests: string[];
+  extracted_links: string[];
+  extracted_entities: Array<{ type: string; value: string }>;
+  impersonation_indicators: string[];
+  reasons_for_uncertainty: string[];
+}
+
+export interface RiskBreakdownItem {
+  category: string;
+  score?: number | null;
+  status: 'Evaluated' | 'Not evaluated' | string;
+  details: string;
+}
+
+export interface EvidenceTimelineItem {
+  timestamp: string;
+  event: string;
+  details?: string | null;
+}
+
+export interface InvestigationReport {
+  id?: number;
+  report_id: string;
+  scan_id?: string | null;
+  created_at: string;
+  input_type: 'url' | 'message' | 'dataset_record' | string;
+  source_type: string;
+  target_summary: string;
+  verdict: 'Suspicious' | 'Likely Suspicious' | 'Inconclusive' | 'No Significant Threat Detected' | string;
+  severity: 'Critical' | 'High' | 'Medium' | 'Low' | 'Informational' | string;
+  risk_score: number;
+  model_probability?: number | null;
+  confidence_score?: number | null;
+  scan_status: 'Completed' | 'Partial' | 'Failed' | string;
+  executive_summary: string;
+  indicators: ThreatIndicatorItem[];
+  model_analysis?: AiModelAnalysis | null;
+  url_analysis?: UrlDomainAnalysis | null;
+  message_analysis?: MessageAnalysis | null;
+  risk_breakdown: RiskBreakdownItem[];
+  calculation_explanation: string;
+  potential_impacts: string[];
+  recommended_actions: string[];
+  evidence_timeline: EvidenceTimelineItem[];
+  checks_performed: Array<{ check: string; status: string; result?: string }>;
+  unavailable_checks: Array<{ check: string; status: string; reason?: string }>;
+  provenance: {
+    source_type?: string;
+    data_source?: string;
+    is_demo?: boolean;
+    external_id?: string | null;
+    custom_id?: string | null;
+    content_hash?: string | null;
+    provenance_badge?: string;
+    [key: string]: any;
+  };
+  limitations: string[];
+}
+
+export interface InvestigationReportListItem {
+  id: number;
+  report_id: string;
+  scan_id?: string | null;
+  input_type: string;
+  source_type: string;
+  target_summary: string;
+  verdict: string;
+  severity: string;
+  risk_score: number;
+  created_at: string;
+}
+
+export interface InvestigationReportsResponse {
+  items: InvestigationReportListItem[];
+  reports: InvestigationReportListItem[];
+  total: number;
+  page: number;
+  pages: number;
+  limit: number;
 }

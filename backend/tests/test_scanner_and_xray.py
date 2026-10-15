@@ -46,7 +46,10 @@ def test_website_xray_content_unavailable():
     response = client.post("/api/scanner/xray", json={"url": "https://this-domain-does-not-exist-at-all-xyz999.invalid"})
     assert response.status_code == 200
     data = response.json()
-    assert data["fetch_status"] == "CONTENT_UNAVAILABLE"
+    assert data["scan_status"] == "INCOMPLETE"
+    assert data["fetch_status"] in ["INCOMPLETE", "CONTENT_UNAVAILABLE"]
+    assert data["risk_assessment"]["verdict"] == "INCONCLUSIVE"
+    assert data["risk_assessment"]["is_conclusive"] is False
     assert "error_detail" in data
     assert "risk_assessment" in data
 

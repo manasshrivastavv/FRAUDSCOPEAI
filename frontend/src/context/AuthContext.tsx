@@ -10,6 +10,7 @@ interface AuthContextType {
   register: (payload: RegisterPayload) => Promise<User>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
+  updateUser: (updatedUser: User) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -30,13 +31,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const updateUser = (updatedUser: User) => {
+    setUser(updatedUser);
+  };
+
   useEffect(() => {
-    const token = getAuthToken();
-    if (token) {
-      refreshUser();
-    } else {
-      setIsLoading(false);
-    }
+    // Check both HttpOnly cookie and stored auth token on startup
+    const initAuth = async () => {
+      try {
+        const currentUser = await authApi.getMe();
+        setUser(currentUser);
+      } catch {
+        setUser(null);
+        setAuthToken(null);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    initAuth();
   }, []);
 
   const login = async (payload: LoginPayload): Promise<User> => {
@@ -76,6 +88,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         register,
         logout,
         refreshUser,
+        updateUser,
       }}
     >
       {children}

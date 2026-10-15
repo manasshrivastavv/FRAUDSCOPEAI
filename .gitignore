@@ -43,8 +43,16 @@ frontend/dist-ssr/
 
 # Environment & IDE
 .env
-.env.local
+.env.*
+*.env
+backend/.env
+frontend/.env
+*.session
+*.session-journal
+sessions/
+backend/sessions/
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+

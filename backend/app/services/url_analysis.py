@@ -12,9 +12,11 @@ URL_SHORTENERS = {
 
 # Suspicious keywords in domain or path targeting banking / payments
 SUSPICIOUS_DOMAIN_KEYWORDS = [
-    "verify-bank", "secure-login", "kyc-update", "otp-auth",
-    "account-freeze", "support-desk", "online-banking-auth",
-    "free-cash", "crypto-yield", "fast-payout", "claim-reward"
+    "verify-bank", "bank-verify", "bank-account-verify", "account-verify", "verify-account",
+    "secure-login", "bank-login", "account-login", "banking-login", "online-banking",
+    "kyc-update", "kyc-verification", "otp-auth", "otp-verification",
+    "account-freeze", "unfreeze-account", "support-desk", "online-banking-auth",
+    "free-cash", "crypto-yield", "fast-payout", "claim-reward", "claim-bank-reward"
 ]
 
 def is_private_or_loopback_ip(hostname: str) -> bool:
@@ -146,9 +148,25 @@ def analyze_url(raw_url: str) -> Dict[str, Any]:
     # 6. Deceptive keywords in hostname or path
     url_lower = f"{hostname}{path}".lower()
     matched_suspicious_kw = [kw for kw in SUSPICIOUS_DOMAIN_KEYWORDS if kw in url_lower]
+    
+    # Compound banking + credential authentication indicators
+    banking_terms = ["bank", "banking", "account", "wallet", "netbanking", "debit", "credit"]
+    auth_terms = ["verify", "verification", "login", "signin", "auth", "kyc", "otp", "password", "security", "update"]
+    has_banking = any(b in url_lower for b in banking_terms)
+    has_auth = any(a in url_lower for a in auth_terms)
+    is_whitelisted = any(wl in hostname for wl in ["standardbank.com", "bankofamerica.com", "chase.com", "wellsfargo.com", "rbi.org.in"])
+
     if matched_suspicious_kw:
         heuristics.append(f"Deceptive phishing/financial keyword markers in URL: {', '.join(matched_suspicious_kw)}")
-        risk_score += 30
+        risk_score += 35
+    elif has_banking and has_auth and not is_whitelisted:
+        heuristics.append("Deceptive combination of banking and authentication/verification keywords in URL (potential phishing / credential harvesting)")
+        risk_score += 35
+
+    # 6b. Insecure HTTP on credential/verification endpoint
+    if normalized_scheme == "http" and (has_auth or any(term in url_lower for term in ["login", "verify", "auth", "signin", "password"])):
+        heuristics.append("CRITICAL: Unencrypted HTTP transport used on sensitive login/verification path (credential exposure / phishing vector)")
+        risk_score += 35
 
     # 7. Excessively long URL (common in obfuscated redirectors)
     if len(raw_url) > 180:

@@ -220,18 +220,23 @@ export const MuleNetwork3D: React.FC<MuleNetwork3DProps> = ({
   const processedData = useMemo(() => {
     let nodes = activeData.nodes;
 
-    // In Simplified View, select the 14-16 most important nodes:
-    // High-risk entities, mule accounts, VPAs, and connected cases/ads
-    if (viewScope === 'SIMPLIFIED' && nodes.length > 16) {
-      const highRisk = nodes.filter((n) => (n.risk_level || '').toUpperCase() === 'HIGH');
-      const hubs = nodes.filter(
-        (n) => n.node_type === 'entity_bank' || n.node_type === 'entity_upi' || n.node_type === 'case'
+    // In Simplified View, select the 18-24 core nodes:
+    // Core Entity Hubs (Telegrams, UPIs, Phones, URLs, Banks) + High-Risk Connected Ads + Cases
+    if (viewScope === 'SIMPLIFIED' && nodes.length > 20) {
+      const entityHubs = nodes.filter(
+        (n) => n.node_type !== 'ad' && n.node_type !== 'case'
       );
+      const highRiskAds = nodes.filter(
+        (n) => n.node_type === 'ad' && (n.risk_level || '').toUpperCase() === 'HIGH'
+      );
+      const cases = nodes.filter((n) => n.node_type === 'case');
       const otherNodes = nodes.filter(
-        (n) => (n.risk_level || '').toUpperCase() !== 'HIGH' && n.node_type !== 'entity_bank' && n.node_type !== 'entity_upi'
+        (n) => (n.risk_level || '').toUpperCase() !== 'HIGH'
       );
 
-      const combined = Array.from(new Set([...highRisk, ...hubs, ...otherNodes])).slice(0, 16);
+      const combined = Array.from(
+        new Set([...entityHubs, ...highRiskAds.slice(0, 10), ...cases.slice(0, 4), ...otherNodes])
+      ).slice(0, 24);
       nodes = combined;
     }
 

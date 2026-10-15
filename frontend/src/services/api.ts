@@ -10,7 +10,17 @@ import {
   User,
   AuthResponse,
   RegisterPayload,
-  LoginPayload
+  LoginPayload,
+  SourceAdapterTelemetry,
+  LiveFeedStatus,
+  ReplayStatus,
+  ReplayStartPayload,
+  DatasetInfo,
+  InvestigationReport,
+  InvestigationReportsResponse,
+  InvestigationReportListItem,
+  NotificationItem,
+  NotificationListResponse
 } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_URL || '';
@@ -60,6 +70,34 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   return response.json();
 }
 
+async function requestMultipart<T>(endpoint: string, formData: FormData): Promise<T> {
+  const url = `${BASE_URL}${endpoint}`;
+  const headers: Record<string, string> = {};
+
+  if (authToken) {
+    headers['Authorization'] = `Bearer ${authToken}`;
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    body: formData,
+    headers,
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    let errorMsg = `HTTP Error ${response.status}`;
+    try {
+      const errJson = await response.json();
+      errorMsg = errJson.detail || errJson.message || errorMsg;
+    } catch {
+      // fallback
+    }
+    throw new Error(errorMsg);
+  }
+  return response.json();
+}
+
 export const authApi = {
   register: (payload: RegisterPayload) =>
     request<User>('/api/auth/register', {
@@ -91,6 +129,49 @@ export const authApi = {
   },
 
   getMe: () => request<User>('/api/auth/me'),
+
+  updateProfile: (payload: { full_name?: string; role?: string }) =>
+    request<User>('/api/auth/profile', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  uploadAvatar: (formData: FormData) =>
+    requestMultipart<User>('/api/auth/avatar', formData),
+
+  removeAvatar: () =>
+    request<User>('/api/auth/avatar', {
+      method: 'DELETE',
+    }),
+
+  changePassword: (payload: { current_password: string; new_password: string; confirm_new_password?: string }) =>
+    request<{ message: string }>('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+};
+
+export const notificationApi = {
+  getNotifications: (params: { limit?: number; offset?: number; unread_only?: boolean } = {}) => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.offset) query.set('offset', String(params.offset));
+    if (params.unread_only !== undefined) query.set('unread_only', String(params.unread_only));
+    return request<NotificationListResponse>(`/api/notifications?${query.toString()}`);
+  },
+
+  getUnreadCount: () =>
+    request<{ unread_count: number }>('/api/notifications/unread-count'),
+
+  markAsRead: (id: number) =>
+    request<NotificationItem>(`/api/notifications/${id}/read`, {
+      method: 'POST',
+    }),
+
+  markAllAsRead: () =>
+    request<{ message: string; updated_count: number }>('/api/notifications/read-all', {
+      method: 'POST',
+    }),
 };
 
 const listAdsRequest = (params: {
@@ -146,16 +227,45 @@ export const api = {
     ),
 
   // Advertisements & Scanner
-  analyzeAd: (content: string, sourceType: string = 'text', submittedUrl?: string) =>
+  analyzeAd: (content: string, sourceType: string = 'text', submittedUrl?: string, platform?: string) =>
     request<AdvertisementDetail>('/api/ads/analyze', {
       method: 'POST',
-      body: JSON.stringify({ content, source_type: sourceType, submitted_url: submittedUrl || null }),
+      body: JSON.stringify({ content, source_type: sourceType, submitted_url: submittedUrl || null, platform: platform || null }),
     }),
-  analyzeText: (content: string, sourceType: string = 'text', submittedUrl?: string) =>
+  analyzeText: (content: string, sourceType: string = 'text', submittedUrl?: string, platform?: string) =>
     request<AdvertisementDetail>('/api/ads/analyze', {
       method: 'POST',
-      body: JSON.stringify({ content, source_type: sourceType, submitted_url: submittedUrl || null }),
+      body: JSON.stringify({ content, source_type: sourceType, submitted_url: submittedUrl || null, platform: platform || null }),
     }),
+
+  // Source Adapters & Ingestion
+  getSourcesStatus: () => request<SourceAdapterTelemetry[]>('/api/ads/sources'),
+  syncSource: (adapterId: string) =>
+    request<{ status: string; message: string; fetched: number; persisted: number; duplicates: number }>(
+      `/api/ads/sync-source/${adapterId}`,
+      { method: 'POST' }
+    ),
+  ingestPost: (post: { content: string; platform: string; external_id?: string; advertiser_name?: string; submitted_url?: string; is_demo?: boolean }) =>
+    request<{ status: string; ad_id: number; custom_id: string; is_duplicate: boolean; risk_level: string }>(
+      '/api/ads/ingest',
+      { method: 'POST', body: JSON.stringify(post) }
+    ),
+  getLiveStatus: () => request<LiveFeedStatus>('/api/ads/live-status'),
+  pollTelegram: () =>
+    request<{ status: string; fetched_count: number; persisted_count: number; channels: string[]; message: string }>(
+      '/api/ads/telegram/poll',
+      { method: 'POST' }
+    ),
+  testTelegramConnection: () =>
+    request<{
+      success: boolean;
+      status: string;
+      connected_to_dc: boolean;
+      user_authorized: boolean;
+      channels_count: number;
+      channels: string[];
+      message: string;
+    }>('/api/ads/telegram/test-connection', { method: 'POST' }),
 
   uploadOcrImage: async (file: File) => {
     const formData = new FormData();
@@ -295,6 +405,44 @@ export const api = {
 
   getExportCsvUrl: () => `${BASE_URL}/api/reports/export`,
 
+  generateInvestigationReport: (payload: {
+    scan_id?: string;
+    advertisement_id?: number;
+    input_type?: string;
+    content?: string;
+    url?: string;
+    title?: string;
+  }) =>
+    request<InvestigationReport>('/api/reports/generate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  listInvestigationReports: (params: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    severity?: string;
+    input_type?: string;
+  } = {}) => {
+    const query = new URLSearchParams();
+    if (params.page) query.set('page', String(params.page));
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.search) query.set('search', params.search);
+    if (params.severity) query.set('severity', params.severity);
+    if (params.input_type) query.set('input_type', params.input_type);
+    return request<InvestigationReportsResponse>(`/api/reports?${query.toString()}`);
+  },
+
+  getInvestigationReport: (idOrReportId: string | number) =>
+    request<InvestigationReport>(`/api/reports/${idOrReportId}`),
+
+  getReportExportJsonUrl: (idOrReportId: string | number) =>
+    `${BASE_URL}/api/reports/${idOrReportId}/export/json`,
+
+  getReportExportHtmlUrl: (idOrReportId: string | number) =>
+    `${BASE_URL}/api/reports/${idOrReportId}/export/html`,
+
   // Settings
   getSettings: () => request<SystemSettings>('/api/settings'),
   updateSettings: (payload: { risk_threshold_low: number; risk_threshold_high: number; similarity_threshold: number; demo_mode: boolean }) =>
@@ -302,4 +450,26 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
+
+  // Dataset Replay & Live Feed Integration
+  getReplayStatus: () => request<ReplayStatus>('/api/ads/replay/status'),
+  startReplay: (payload?: ReplayStartPayload) =>
+    request<ReplayStatus>('/api/ads/replay/start', {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }),
+  pauseReplay: () => request<ReplayStatus>('/api/ads/replay/pause', { method: 'POST' }),
+  resumeReplay: () => request<ReplayStatus>('/api/ads/replay/resume', { method: 'POST' }),
+  stopReplay: () => request<ReplayStatus>('/api/ads/replay/stop', { method: 'POST' }),
+  restartReplay: (payload?: ReplayStartPayload) =>
+    request<ReplayStatus>('/api/ads/replay/restart', {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }),
+  getDatasetInfo: () => request<DatasetInfo>('/api/ads/dataset/info'),
+  importDataset: (source: string = 'both') =>
+    request<{ status: string; source: string; dataset_stats: any; import_summary: any }>(
+      `/api/ads/dataset/import?source=${source}`,
+      { method: 'POST' }
+    ),
 };

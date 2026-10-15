@@ -32,7 +32,9 @@ def get_threat_network(
         "active_clusters_count": graph_data["active_clusters_count"],
         "clusters_summary": graph_data["clusters_summary"][:5],
         "ad_nodes": len([n for n in nodes if n.node_type == "ad"]),
-        "case_nodes": len([n for n in nodes if n.node_type == "case"])
+        "case_nodes": len([n for n in nodes if n.node_type == "case"]),
+        "entity_nodes": len([n for n in nodes if n.node_type not in ("ad", "case")]),
+        "high_risk_nodes": len([n for n in nodes if (n.risk_level or "").upper() == "HIGH"])
     }
 
     return NetworkGraphResponse(

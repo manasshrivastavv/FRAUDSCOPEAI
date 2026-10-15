@@ -29,8 +29,11 @@ class Advertisement(Base):
     created_at = Column(DateTime, default=utc_now)
     review_status = Column(String(32), default="NEW") # NEW, NEEDS_REVIEW, UNDER_INVESTIGATION, ESCALATED, CLOSED, FALSE_POSITIVE
     platform = Column(String(64), default="Unknown")
+    advertiser_name = Column(String(128), nullable=True) # Page/channel/advertiser name
+    external_id = Column(String(128), nullable=True, index=True) # Meta ad id, Telegram msg id, or external feed id
     is_demo = Column(Boolean, default=False, index=True) # DEMO vs LIVE scan provenance
-    data_source = Column(String(32), default="LIVE_SCAN", index=True) # LIVE_SCAN, DATASET_IMPORT, SYNTHETIC_DEMO
+    data_source = Column(String(32), default="LIVE_SCAN", index=True) # LIVE_SCAN, DATASET_IMPORT, SYNTHETIC_DEMO, REAL_API, MANUAL_SUBMISSION, DATASET_REPLAY
+    raw_metadata = Column(Text, nullable=True) # JSON serialized original payload/ground truth provenance
 
     # Relationships
     analysis = relationship("AnalysisResult", back_populates="advertisement", uselist=False, cascade="all, delete-orphan")
@@ -151,8 +154,57 @@ class User(Base):
     email = Column(String(128), unique=True, index=True, nullable=False)
     username = Column(String(64), unique=True, index=True, nullable=False)
     password_hash = Column(String(256), nullable=False)
-    role = Column(String(32), default="Investigator", nullable=False) # Investigator, Fraud Analyst, Administrator
+    role = Column(String(32), default="Investigator", nullable=False) # Investigator, Fraud Analyst, Developer, Administrator
+    avatar_url = Column(String(512), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
+
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    title = Column(String(128), nullable=False)
+    message = Column(Text, nullable=False)
+    type = Column(String(32), default="SYSTEM") # HIGH_RISK_ALERT, CASE_UPDATE, SCAN_COMPLETED, SYSTEM
+    severity = Column(String(16), default="INFO") # CRITICAL, HIGH, MEDIUM, LOW, INFO
+    is_read = Column(Boolean, default=False, index=True)
+    target_type = Column(String(32), nullable=True) # case, alert, report, scan
+    target_id = Column(String(64), nullable=True) # e.g. CASE-2026-XXXX
+    created_at = Column(DateTime, default=utc_now, index=True)
+
+    user = relationship("User", back_populates="notifications")
+
+
+class InvestigationReport(Base):
+    __tablename__ = "investigation_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    report_id = Column(String(64), unique=True, index=True, nullable=False) # e.g. RPT-2026-A1B2C3
+    scan_id = Column(String(64), index=True, nullable=True) # e.g. AD-SCAN-XXXX, CASE-2026-XXXX
+    advertisement_id = Column(Integer, ForeignKey("advertisements.id", ondelete="SET NULL"), nullable=True)
+    case_id = Column(Integer, ForeignKey("cases.id", ondelete="SET NULL"), nullable=True)
+
+    input_type = Column(String(32), nullable=False) # "url", "message", "dataset_record"
+    source_type = Column(String(32), default="manual_scan") # "manual_scan", "url_scanner", "website_xray", "dataset_replay", "api_feed"
+    target_summary = Column(String(512), nullable=False) # URL or snippet preview
+
+    verdict = Column(String(64), nullable=False) # "Suspicious", "Likely Suspicious", "Inconclusive", "No Significant Threat Detected"
+    severity = Column(String(16), nullable=False) # "Critical", "High", "Medium", "Low", "Informational"
+    risk_score = Column(Float, nullable=False) # 0.0 to 100.0
+    model_probability = Column(Float, nullable=True) # 0.0 to 1.0 (raw ML probability)
+    confidence_score = Column(Float, nullable=True) # 0.0 to 1.0 (calibrated coverage)
+    status = Column(String(32), default="Completed") # "Completed", "Partial", "Failed"
+
+    report_data = Column(Text, nullable=False) # JSON encoded structured report payload
+
+    created_at = Column(DateTime, default=utc_now, index=True)
+
+    # Relationships
+    advertisement = relationship("Advertisement", foreign_keys=[advertisement_id])
+    case = relationship("Case", foreign_keys=[case_id])
 

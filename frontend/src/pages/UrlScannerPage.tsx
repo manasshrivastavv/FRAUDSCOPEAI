@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Globe,
@@ -13,11 +13,15 @@ import {
   Info,
   Lock,
   FileText,
-  Sparkles
+  Sparkles,
+  Brain,
+  Loader2
 } from 'lucide-react';
 import { api } from '../services/api';
 import { ExplainableVerdictCard } from '../components/investigation/ExplainableVerdictCard';
+import { AiInvestigationReportModal } from '../components/investigation/AiInvestigationReportModal';
 import { generateCaseReportPdf } from '../services/pdfReportGenerator';
+import { InvestigationReport } from '../types';
 
 export const UrlScannerPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -29,6 +33,28 @@ export const UrlScannerPage: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<any | null>(null);
   const [savedCaseRef, setSavedCaseRef] = useState<string | undefined>(undefined);
+  const [aiReport, setAiReport] = useState<InvestigationReport | null>(null);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [generatingReport, setGeneratingReport] = useState(false);
+  const resultRef = useRef<HTMLDivElement>(null);
+
+  const handleOpenAiReport = async () => {
+    if (!urlInput.trim()) return;
+    setGeneratingReport(true);
+    try {
+      const rep = await api.generateInvestigationReport({
+        url: urlInput.trim(),
+        title: titleInput.trim() || undefined,
+        input_type: 'url',
+      });
+      setAiReport(rep);
+      setIsReportModalOpen(true);
+    } catch (err: any) {
+      alert('Failed to generate AI report: ' + (err.message || 'Unknown error'));
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
 
   const samplePresets = [
     {
@@ -69,6 +95,7 @@ export const UrlScannerPage: React.FC = () => {
 
     setScanning(true);
     setErrorMsg(null);
+    setScanResult(null);
     setSavedCaseRef(undefined);
 
     try {
@@ -77,6 +104,9 @@ export const UrlScannerPage: React.FC = () => {
       if (data.saved_case_ref) {
         setSavedCaseRef(data.saved_case_ref);
       }
+      setTimeout(() => {
+        resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
     } catch (err: any) {
       setErrorMsg(err.message || 'URL Scan failed. Please check network connectivity.');
     } finally {
@@ -254,7 +284,16 @@ export const UrlScannerPage: React.FC = () => {
         </form>
       </div>
 
-      {/* 3. Error Banner */}
+      {/* 3. Loading Indicator */}
+      {scanning && (
+        <div className="p-8 rounded-[var(--radius)] bg-[var(--card)] border border-[var(--border)] text-center space-y-3 shadow-xs animate-in fade-in">
+          <Loader2 className="w-6 h-6 animate-spin text-[var(--primary)] mx-auto" />
+          <p className="text-xs font-semibold text-[var(--text)]">Scanning target URL & resolving threat heuristics...</p>
+          <p className="text-[11px] text-[var(--muted)]">Checking anti-SSRF protections, IP encodings, brand impersonation tokens, and domain reputation.</p>
+        </div>
+      )}
+
+      {/* 4. Error Banner */}
       {errorMsg && (
         <div className="p-4 rounded-[var(--radius)] bg-[#FDE8E8] border border-[#F8B4B6] text-xs text-[#A8341C] font-mono flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -262,9 +301,32 @@ export const UrlScannerPage: React.FC = () => {
         </div>
       )}
 
-      {/* 4. Scan Result via Explainable Verdict */}
+      {/* 5. Scan Result via Explainable Verdict */}
       {scanResult && (
-        <div className="space-y-4">
+        <div ref={resultRef} className="space-y-4 animate-in fade-in duration-200">
+          <div className="p-4 rounded-[var(--radius)] bg-[var(--card)] border border-cyan-800/40 flex items-center justify-between gap-4 shadow-xs">
+            <div className="flex items-center gap-2.5">
+              <Brain className="w-5 h-5 text-cyan-400 shrink-0" />
+              <div>
+                <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-[var(--text)]">
+                  Certified URL AI Investigation Report
+                </h4>
+                <p className="text-xs text-[var(--muted)]">
+                  Inspect comprehensive 11-section structured report with domain heuristics, anti-SSRF safeguards, and risk breakdown.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleOpenAiReport}
+              disabled={generatingReport}
+              className="btn-primary text-xs py-2 px-4 flex items-center gap-2 font-mono font-bold uppercase tracking-wide bg-cyan-700 hover:bg-cyan-600 text-white shrink-0 shadow-xs"
+            >
+              <Brain className={`w-3.5 h-3.5 ${generatingReport ? 'animate-spin' : ''}`} />
+              <span>{generatingReport ? 'Generating...' : 'View Full AI Report'}</span>
+            </button>
+          </div>
+
           <ExplainableVerdictCard
             riskScore={scanResult.risk_score}
             riskLevel={scanResult.risk_level}
@@ -301,6 +363,13 @@ export const UrlScannerPage: React.FC = () => {
           />
         </div>
       )}
+
+      {/* Full AI Investigation Report Modal (11 sections) */}
+      <AiInvestigationReportModal
+        report={aiReport}
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+      />
     </div>
   );
 };

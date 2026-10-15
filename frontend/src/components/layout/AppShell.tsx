@@ -12,14 +12,21 @@ import {
   Plus,
   ShieldAlert,
   ChevronDown,
-  ExternalLink
+  ExternalLink,
+  CheckCheck,
+  CheckCircle2,
+  Clock,
+  Inbox,
+  RefreshCw,
+  FolderOpen
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
-import { api } from '../../services/api';
+import { api, notificationApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { CommandPalette } from '../ui/CommandPalette';
 import { QuickScanModal } from '../ui/QuickScanModal';
+import { NotificationItem } from '../../types';
 
 interface NavTab {
   nameKey: string;
@@ -38,6 +45,14 @@ export const AppShell: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // Notification state
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const notificationsRef = useRef<HTMLDivElement>(null);
 
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [quickScanModalOpen, setQuickScanModalOpen] = useState(false);
@@ -58,20 +73,98 @@ export const AppShell: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Close user dropdown on outside click
+  // Fetch unread count for notifications
+  const fetchUnreadCount = async () => {
+    try {
+      const res = await notificationApi.getUnreadCount();
+      setUnreadCount(res.unread_count);
+    } catch {
+      // silently handle when not logged in
+    }
+  };
+
+  const loadNotifications = async () => {
+    setNotificationsLoading(true);
+    setNotificationsError(null);
+    try {
+      const res = await notificationApi.getNotifications({ limit: 20 });
+      setNotifications(res.notifications);
+      setUnreadCount(res.unread_count);
+    } catch (err: any) {
+      setNotificationsError(err.message || 'Unable to load notifications.');
+    } finally {
+      setNotificationsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchUnreadCount();
+    const timer = setInterval(fetchUnreadCount, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleToggleNotifications = () => {
+    if (!notificationsOpen) {
+      loadNotifications();
+    }
+    setNotificationsOpen(!notificationsOpen);
+    setUserMenuOpen(false);
+  };
+
+  const handleMarkAsRead = async (id: number, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    try {
+      await notificationApi.markAsRead(id);
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+      setUnreadCount(prev => Math.max(0, prev - 1));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      await notificationApi.markAllAsRead();
+      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+      setUnreadCount(0);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleNotificationClick = async (notif: NotificationItem) => {
+    if (!notif.is_read) {
+      await handleMarkAsRead(notif.id);
+    }
+    setNotificationsOpen(false);
+    if (notif.target_type === 'alert') {
+      navigate('/alerts');
+    } else if (notif.target_type === 'case') {
+      navigate('/cases');
+    } else if (notif.target_type === 'report') {
+      navigate('/reports');
+    } else if (notif.target_type === 'scan') {
+      navigate('/url-scanner');
+    }
+  };
+
+  // Close dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
         setUserMenuOpen(false);
       }
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+        setNotificationsOpen(false);
+      }
     };
-    if (userMenuOpen) {
+    if (userMenuOpen || notificationsOpen) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [userMenuOpen]);
+  }, [userMenuOpen, notificationsOpen]);
 
   // Load alert and stats counts for badges
   useEffect(() => {
@@ -123,7 +216,6 @@ export const AppShell: React.FC = () => {
     { nameKey: 'nav.dashboard', defaultName: 'Overview', href: '/console' },
     { nameKey: 'nav.url_scanner', defaultName: 'URL Scanner', href: '/url-scanner' },
     { nameKey: 'nav.website_xray', defaultName: 'Web X-Ray', href: '/website-xray' },
-    { nameKey: 'nav.ad_scanner', defaultName: 'Ad Analysis', href: '/ad-scanner' },
     { nameKey: 'nav.clusters', defaultName: 'Threat Network', href: '/network' },
     { nameKey: 'nav.flagged_posts', defaultName: 'Flagged', href: '/flagged-posts', badge: flaggedCount },
     { nameKey: 'nav.cases', defaultName: 'Cases', href: '/cases' },
@@ -266,17 +358,143 @@ export const AppShell: React.FC = () => {
             </button>
           </div>
 
-          {/* Notification Bell */}
-          <Link
-            to="/alerts"
-            className="relative p-1.5 rounded-[var(--radius)] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--table-hover)] transition-colors shrink-0"
-            title="High-risk threat alerts"
-          >
-            <Bell className="w-4 h-4 sm:w-5 sm:h-5" />
-            {unresolvedAlertsCount > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[var(--primary)] ring-2 ring-[var(--card)]" />
+          {/* Notification Bell with Dropdown Panel */}
+          <div className="relative shrink-0" ref={notificationsRef}>
+            <button
+              type="button"
+              onClick={handleToggleNotifications}
+              className="relative p-1.5 rounded-[var(--radius)] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--table-hover)] transition-colors shrink-0"
+              title="Notifications & Alerts"
+              aria-label="View notifications"
+              aria-expanded={notificationsOpen}
+            >
+              <Bell className="w-4 h-4 sm:w-5 sm:h-5" />
+              {unreadCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-[#E5484D] text-white text-[10px] font-bold font-mono flex items-center justify-center ring-2 ring-[var(--card)] shadow-xs animate-in fade-in">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
+            </button>
+
+            {notificationsOpen && (
+              <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-[var(--radius)] bg-[var(--card)] border border-[var(--border)] shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                {/* Header */}
+                <div className="px-3.5 py-2.5 border-b border-[var(--border)] bg-[var(--table-header)] flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs sm:text-sm font-bold text-[var(--text)]">Notifications</span>
+                    {unreadCount > 0 && (
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[var(--primary)] text-white font-semibold">
+                        {unreadCount} unread
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {unreadCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleMarkAllAsRead}
+                        className="text-[11px] text-[var(--primary)] hover:underline font-medium flex items-center gap-1"
+                        title="Mark all as read"
+                      >
+                        <CheckCheck className="w-3.5 h-3.5" />
+                        <span>Mark all read</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={loadNotifications}
+                      disabled={notificationsLoading}
+                      className="p-1 text-[var(--muted)] hover:text-[var(--text)] rounded"
+                      title="Refresh notifications"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${notificationsLoading ? 'animate-spin' : ''}`} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Notifications List */}
+                <div className="max-h-80 overflow-y-auto divide-y divide-[var(--border)]">
+                  {notificationsLoading && notifications.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-[var(--muted)] flex items-center justify-center gap-2">
+                      <RefreshCw className="w-4 h-4 animate-spin text-[var(--primary)]" />
+                      <span>Loading notifications...</span>
+                    </div>
+                  ) : notificationsError ? (
+                    <div className="p-4 text-center text-xs">
+                      <p className="text-[#A8341C] mb-2">{notificationsError}</p>
+                      <button
+                        type="button"
+                        onClick={loadNotifications}
+                        className="btn-secondary text-[11px] py-1 px-2.5 mx-auto"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : notifications.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-[var(--muted)] space-y-2">
+                      <Inbox className="w-8 h-8 mx-auto text-[var(--muted)]/50" />
+                      <p className="font-semibold text-[var(--text)]">You're all caught up!</p>
+                      <p className="text-[11px]">No active notifications or alerts pending review.</p>
+                    </div>
+                  ) : (
+                    notifications.map((notif) => (
+                      <div
+                        key={notif.id}
+                        onClick={() => handleNotificationClick(notif)}
+                        className={`p-3 text-xs cursor-pointer transition-colors flex items-start gap-2.5 ${
+                          notif.is_read
+                            ? 'bg-[var(--card)] hover:bg-[var(--table-hover)] text-[var(--muted)]'
+                            : 'bg-[var(--bg)] hover:bg-[var(--table-hover)] text-[var(--text)] font-medium border-l-2 border-l-[var(--primary)]'
+                        }`}
+                      >
+                        <div className="shrink-0 mt-0.5">
+                          {notif.severity === 'CRITICAL' || notif.severity === 'HIGH' ? (
+                            <ShieldAlert className="w-4 h-4 text-[#A8341C]" />
+                          ) : notif.target_type === 'case' ? (
+                            <FolderOpen className="w-4 h-4 text-[#23865B]" />
+                          ) : (
+                            <Bell className="w-4 h-4 text-[var(--primary)]" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="font-semibold truncate text-[var(--text)]">{notif.title}</span>
+                            <span className="text-[10px] text-[var(--muted)] whitespace-nowrap">
+                              {new Date(notif.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-[var(--muted)] line-clamp-2 mt-0.5 leading-snug">
+                            {notif.message}
+                          </p>
+                        </div>
+                        {!notif.is_read && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleMarkAsRead(notif.id, e)}
+                            className="p-1 text-[var(--muted)] hover:text-[var(--primary)] rounded shrink-0"
+                            title="Mark as read"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Footer link to alerts */}
+                <div className="p-2 border-t border-[var(--border)] bg-[var(--table-header)] text-center">
+                  <Link
+                    to="/alerts"
+                    onClick={() => setNotificationsOpen(false)}
+                    className="text-[11px] text-[var(--primary)] hover:underline font-semibold"
+                  >
+                    View All Threat Alerts →
+                  </Link>
+                </div>
+              </div>
             )}
-          </Link>
+          </div>
 
           {/* User Profile Avatar & Dropdown */}
           <div className="relative shrink-0" ref={userMenuRef}>
@@ -287,29 +505,51 @@ export const AppShell: React.FC = () => {
               aria-label="User menu"
               aria-expanded={userMenuOpen}
             >
-              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-[var(--accent)] text-white text-xs font-mono font-bold flex items-center justify-center shadow-2xs ring-1 ring-[var(--border)]">
-                {initials}
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-[var(--accent)] text-white text-xs font-mono font-bold flex items-center justify-center shadow-2xs ring-1 ring-[var(--border)] overflow-hidden">
+                {user?.avatar_url ? (
+                  <img
+                    src={user.avatar_url}
+                    alt={displayName}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  initials
+                )}
               </div>
               <ChevronDown className="w-3.5 h-3.5 text-[var(--muted)]" />
             </button>
 
             {userMenuOpen && (
-              <div className="absolute right-0 mt-2 w-56 rounded-[var(--radius)] bg-[var(--card)] border border-[var(--border)] shadow-lg py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
-                <div className="px-3.5 py-2.5 border-b border-[var(--border)]">
-                  <div className="text-sm font-bold text-[var(--text)] truncate">{displayName}</div>
-                  <div className="text-xs font-mono text-[var(--muted)] truncate">{displayRole}</div>
+              <div className="absolute right-0 mt-2 w-60 rounded-[var(--radius)] bg-[var(--card)] border border-[var(--border)] shadow-lg py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
+                <div className="px-3.5 py-2.5 border-b border-[var(--border)] flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-full bg-[var(--accent)] text-white text-xs font-mono font-bold flex items-center justify-center ring-1 ring-[var(--border)] overflow-hidden shrink-0">
+                    {user?.avatar_url ? (
+                      <img
+                        src={user.avatar_url}
+                        alt={displayName}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      initials
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-bold text-[var(--text)] truncate">{displayName}</div>
+                    <div className="text-[11px] text-[var(--muted)] truncate">{user?.email || ''}</div>
+                    <div className="text-[10px] font-mono text-[var(--primary)] uppercase font-semibold mt-0.5">{displayRole}</div>
+                  </div>
                 </div>
                 <Link
                   to="/settings"
                   onClick={() => setUserMenuOpen(false)}
                   className="block px-3.5 py-2 text-xs sm:text-sm text-[var(--text)] hover:bg-[var(--table-hover)] transition-colors"
                 >
-                  {t('nav.settings', 'Settings')}
+                  {t('nav.settings', 'Settings & Profile')}
                 </Link>
                 <button
                   type="button"
                   onClick={handleLogout}
-                  className="w-full text-left px-3.5 py-2 text-xs sm:text-sm text-[#A8341C] hover:bg-[#FDE8E8] transition-colors flex items-center gap-2"
+                  className="w-full text-left px-3.5 py-2 text-xs sm:text-sm text-[#A8341C] hover:bg-[#FDE8E8] transition-colors flex items-center gap-2 border-t border-[var(--border)]/60 mt-1 pt-2"
                 >
                   <LogOut className="w-4 h-4" />
                   <span>{t('nav.logout', 'Log out')}</span>

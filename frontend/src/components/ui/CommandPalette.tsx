@@ -88,7 +88,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     { label: t('nav.dashboard', 'Overview'), icon: LayoutDashboard, path: '/console' },
     { label: t('nav.url_scanner', 'Smart URL Scanner'), icon: Globe, path: '/url-scanner' },
     { label: t('nav.website_xray', 'Website X-Ray'), icon: ScanSearch, path: '/website-xray' },
-    { label: t('nav.ad_scanner', 'Ad & Message Analysis'), icon: ShieldAlert, path: '/ad-scanner' },
+    { label: 'Full Studio Scanner (Text & OCR)', icon: ScanSearch, path: '/scanner' },
     { label: t('nav.clusters', 'Threat Network Detective'), icon: Network, path: '/network' },
     { label: t('nav.cases', 'Investigation Cases'), icon: CreditCard, path: '/cases' },
     { label: t('nav.reports', 'Forensic Reports'), icon: FileBarChart2, path: '/reports' },

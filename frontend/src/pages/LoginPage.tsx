@@ -22,7 +22,7 @@ export const LoginPage: React.FC = () => {
 
   const stateData = location.state as { from?: { pathname: string }; registeredEmail?: string; message?: string } | null;
 
-  const [identifier, setIdentifier] = useState(stateData?.registeredEmail || 'investigator');
+  const [identifier, setIdentifier] = useState(stateData?.registeredEmail || '');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -44,7 +44,7 @@ export const LoginPage: React.FC = () => {
     setInfoMsg(null);
 
     if (!identifier.trim() || !password) {
-      setErrorMsg('Please enter both your username/email and password.');
+      setErrorMsg('Please enter both your email address/username and password.');
       return;
     }
 
@@ -105,20 +105,6 @@ export const LoginPage: React.FC = () => {
               <span>{errorMsg}</span>
             </div>
           )}
-
-          {/* Default Credentials Quick Tip for Evaluators */}
-          <div className="p-3 rounded-lg bg-[#FFFDF7] border border-[#E8DDB8] text-xs space-y-1">
-            <div className="flex items-center justify-between text-[#A67C00] font-medium text-[11px]">
-              <span className="flex items-center gap-1">
-                <KeyRound className="w-3.5 h-3.5" />
-                <span>Seeded Investigator Credentials</span>
-              </span>
-              <span className="text-[10px] bg-[#F5EAC2] text-[#A67C00] px-1.5 py-0.5 rounded">Active</span>
-            </div>
-            <p className="text-[#697386] text-[11px] font-mono">
-              User: <strong className="text-[#202124]">investigator</strong> • Pass: <strong className="text-[#202124]">Password123!</strong>
-            </p>
-          </div>
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>

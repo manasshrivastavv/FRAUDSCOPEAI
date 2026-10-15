@@ -50,7 +50,7 @@ def normalize_graph_identifier(entity_type: str, raw_value: str) -> Optional[Tup
                     return ("PHONE", cleaned, "STRONG")
         return None
 
-    elif entity_type == "UPI_ID":
+    elif entity_type in ["UPI", "UPI_ID"]:
         norm = raw_clean.lower()
         if "@" in norm:
             user_part, handle_part = norm.split("@", 1)
@@ -58,6 +58,9 @@ def normalize_graph_identifier(entity_type: str, raw_value: str) -> Optional[Tup
                 return None
             return ("UPI_ID", norm, "STRONG")
         return None
+
+    elif entity_type in ["BANK", "BANK_ACCOUNT"]:
+        return ("BANK", raw_clean.title(), "STRONG")
 
     elif entity_type == "TELEGRAM":
         handle = raw_clean.lstrip("@").lower().strip()
@@ -94,30 +97,85 @@ def build_threat_graph(
     db: Session,
     ad_limit: int = 50,
     similarity_threshold: float = 80.0,
-    max_hub_degree: int = 25
+    max_hub_degree: int = 35
 ) -> Dict[str, Any]:
     """
-    Constructs a NetworkX forensic graph from database advertisements, cases, and entities.
-    Returns nodes, edges, coordination rankings, and cluster statistics.
+    Constructs an authentic tripartite threat graph linking actual database
+    advertisements, extracted entities (Phones, UPI handles, Telegrams, URLs, Banks),
+    and active investigation cases.
     """
-    ads = db.query(Advertisement).order_by(Advertisement.id.desc()).limit(ad_limit).all()
-    cases = db.query(Case).all()
-    entities = db.query(ExtractedEntity).all()
+    # 1. Identify key threat campaigns:
+    # Ads involved in shared entities (syndicates) + high-risk ads + recent ads
+    all_entities = db.query(ExtractedEntity).all()
+    entity_to_ads: Dict[Tuple[str, str], Set[int]] = {}
+    for e in all_entities:
+        norm = normalize_graph_identifier(e.entity_type, e.normalized_value or e.entity_value)
+        if norm:
+            canon_type, canon_val, _ = norm
+            key = (canon_type, canon_val)
+            if key not in entity_to_ads:
+                entity_to_ads[key] = set()
+            entity_to_ads[key].add(e.advertisement_id)
+
+    # Coordinated ads sharing at least 1 entity
+    syndicate_ad_ids = set()
+    for (itype, ival), aid_set in entity_to_ads.items():
+        if len(aid_set) >= 2 and len(aid_set) <= max_hub_degree:
+            syndicate_ad_ids.update(aid_set)
+
+    # Select representative advertisements
+    selected_ad_ids: List[int] = list(syndicate_ad_ids)[:30]
+
+    # Add recent high-risk ads
+    high_risk_rows = db.query(Advertisement.id)\
+        .filter(Advertisement.analysis.has(risk_level="HIGH"))\
+        .order_by(Advertisement.id.desc())\
+        .limit(20)\
+        .all()
+    for r in high_risk_rows:
+        if len(selected_ad_ids) >= ad_limit:
+            break
+        if r[0] not in selected_ad_ids:
+            selected_ad_ids.append(r[0])
+
+    # If still below limit, fill with latest ads
+    if len(selected_ad_ids) < ad_limit:
+        recent_rows = db.query(Advertisement.id).order_by(Advertisement.id.desc()).limit(ad_limit).all()
+        for r in recent_rows:
+            if len(selected_ad_ids) >= ad_limit:
+                break
+            if r[0] not in selected_ad_ids:
+                selected_ad_ids.append(r[0])
+
+    ads = db.query(Advertisement).filter(Advertisement.id.in_(selected_ad_ids)).all()
+    ad_map = {ad.id: ad for ad in ads}
+    ad_node_ids = set()
 
     G = nx.Graph()
     nodes_list: List[Dict[str, Any]] = []
     edges_list: List[Dict[str, Any]] = []
+    edge_keys_seen = set()
 
-    # Map of ad_id -> ad object
-    ad_map = {ad.id: ad for ad in ads}
-    ad_node_ids = set()
+    TYPE_MAP = {
+        "UPI": "entity_upi",
+        "UPI_ID": "entity_upi",
+        "PHONE": "entity_phone",
+        "WHATSAPP": "entity_phone",
+        "TELEGRAM": "entity_telegram",
+        "URL": "entity_url",
+        "URL_DOMAIN": "entity_url",
+        "BANK": "entity_bank",
+        "BANK_ACCOUNT": "entity_bank",
+        "CRYPTO": "entity_crypto",
+        "EMAIL": "entity_email"
+    }
 
     # 1. Add Advertisement Nodes
     for ad in ads:
         node_id = f"ad_{ad.id}"
         ad_node_ids.add(node_id)
         risk_lvl = ad.analysis.risk_level if ad.analysis else "LOW"
-        risk_scr = ad.analysis.risk_score if ad.analysis else 0.0
+        risk_scr = ad.analysis.risk_score if ad.analysis else 20.0
 
         node_data = {
             "id": node_id,
@@ -141,14 +199,111 @@ def build_threat_graph(
         G.add_node(node_id, **node_data)
         nodes_list.append(node_data)
 
-    # 2. Add Case Nodes and link to Advertisements
-    for c in cases:
+    # 2. Add Real Entity Nodes and link Ads to them
+    selected_ad_id_set = set(selected_ad_ids)
+    ad_ents = db.query(ExtractedEntity).filter(ExtractedEntity.advertisement_id.in_(selected_ad_ids)).all()
+    ent_to_linked_ads: Dict[Tuple[str, str], Set[int]] = {}
+
+    for e in ad_ents:
+        norm = normalize_graph_identifier(e.entity_type, e.normalized_value or e.entity_value)
+        if norm:
+            canon_type, canon_val, _ = norm
+            key = (canon_type, canon_val)
+            if key not in ent_to_linked_ads:
+                ent_to_linked_ads[key] = set()
+            ent_to_linked_ads[key].add(e.advertisement_id)
+
+    ent_node_ids = set()
+    for (itype, ival), linked_aids in ent_to_linked_ads.items():
+        clean_slug = "".join(c if c.isalnum() else "_" for c in ival.strip().lower())[:32]
+        ent_nid = f"ent_{itype.lower()}_{clean_slug}"
+        ent_node_ids.add(ent_nid)
+
+        # Entity risk level inherited from connected ads
+        linked_objs = [ad_map[aid] for aid in linked_aids if aid in ad_map]
+        max_risk = max((a.analysis.risk_score for a in linked_objs if a.analysis and a.analysis.risk_score), default=50.0)
+        ent_risk_lvl = "HIGH" if max_risk >= 65 else ("MEDIUM" if max_risk >= 40 else "LOW")
+
+        # Clean display label
+        label = ival
+        if itype == "TELEGRAM" and not label.startswith("@"):
+            label = f"@{label}"
+        elif itype == "PHONE" and not label.startswith("+"):
+            label = f"+91 {label}"
+
+        node_type = TYPE_MAP.get(itype, "entity_url")
+        ent_data = {
+            "id": ent_nid,
+            "label": label,
+            "node_type": node_type,
+            "risk_level": ent_risk_lvl,
+            "risk_score": round(max_risk, 1),
+            "metadata": {
+                "entity_type": itype,
+                "canonical_value": ival,
+                "linked_ads_count": len(linked_aids),
+                "linked_ad_ids": list(linked_aids)
+            }
+        }
+        G.add_node(ent_nid, **ent_data)
+        nodes_list.append(ent_data)
+
+        # Edges from Ad to Entity
+        for aid in linked_aids:
+            ad_nid = f"ad_{aid}"
+            if ad_nid in ad_node_ids:
+                edge_id = f"edge_{ad_nid}_{ent_nid}"
+                if edge_id not in edge_keys_seen:
+                    edge_keys_seen.add(edge_id)
+                    G.add_edge(ad_nid, ent_nid, relationship=f"USES_{itype}")
+                    edges_list.append({
+                        "id": edge_id,
+                        "source": ad_nid,
+                        "target": ent_nid,
+                        "relationship": f"USES_{itype}",
+                        "label": f"Uses {itype}: {label}",
+                        "evidence_strength": "HIGH",
+                        "coordination_status": "EXTRACTED_ENTITY",
+                        "shared_identifiers": [{"type": itype, "value": ival}]
+                    })
+
+    # 3. Add Pairwise Coordination Edges between Ads sharing entities
+    for (itype, ival), aid_set in ent_to_linked_ads.items():
+        filtered_aids = sorted(list(aid_set.intersection(selected_ad_id_set)))
+        if len(filtered_aids) >= 2:
+            for i in range(len(filtered_aids)):
+                for j in range(i + 1, len(filtered_aids)):
+                    u = f"ad_{filtered_aids[i]}"
+                    v = f"ad_{filtered_aids[j]}"
+                    edge_id = f"edge_coord_{filtered_aids[i]}_{filtered_aids[j]}"
+                    if edge_id not in edge_keys_seen:
+                        edge_keys_seen.add(edge_id)
+                        G.add_edge(u, v, relationship="CONFIRMED_COORDINATION")
+                        edges_list.append({
+                            "id": edge_id,
+                            "source": u,
+                            "target": v,
+                            "relationship": "CONFIRMED_COORDINATION",
+                            "label": f"Shared {itype}: {ival}",
+                            "evidence_strength": "HIGH",
+                            "coordination_status": "CONFIRMED_COORDINATION",
+                            "shared_identifiers": [{"type": itype, "value": ival}]
+                        })
+
+    # 4. Add Linked Cases (only cases with active relationship to included ads)
+    linked_cases = db.query(Case)\
+        .join(case_advertisements, case_advertisements.c.case_id == Case.id)\
+        .filter(case_advertisements.c.advertisement_id.in_(selected_ad_ids))\
+        .distinct()\
+        .all()
+
+    for c in linked_cases:
         c_node = f"case_{c.id}"
         case_data = {
             "id": c_node,
-            "label": c.case_ref,
+            "label": c.case_ref or f"Case #{c.id}",
             "node_type": "case",
-            "risk_level": c.priority,
+            "risk_level": c.priority or "HIGH",
             "risk_score": 85.0 if c.priority == "HIGH" else (50.0 if c.priority == "MEDIUM" else 20.0),
             "metadata": {
                 "db_id": c.id,
@@ -160,114 +315,41 @@ def build_threat_graph(
         G.add_node(c_node, **case_data)
         nodes_list.append(case_data)
 
-        # Linked advertisements
-        linked_ads = db.query(Advertisement)\
-            .join(case_advertisements, case_advertisements.c.advertisement_id == Advertisement.id)\
-            .filter(case_advertisements.c.case_id == c.id)\
+        # Linked ads to this case
+        c_ad_links = db.query(case_advertisements.c.advertisement_id)\
+            .filter(case_advertisements.c.case_id == c.id, case_advertisements.c.advertisement_id.in_(selected_ad_ids))\
             .all()
 
-        for la in linked_ads:
-            la_node = f"ad_{la.id}"
+        for la in c_ad_links:
+            la_node = f"ad_{la[0]}"
             if la_node in ad_node_ids:
                 edge_id = f"edge_{c_node}_{la_node}"
-                G.add_edge(c_node, la_node, relationship="LINKED_CASE", weight=1.0)
-                edges_list.append({
-                    "id": edge_id,
-                    "source": c_node,
-                    "target": la_node,
-                    "relationship": "LINKED_CASE",
-                    "label": "Investigating Case",
-                    "evidence_strength": "HIGH",
-                    "coordination_status": "OFFICIAL_CASE_LINK",
-                    "shared_identifiers": []
-                })
-
-    # 3. Collect Sanitized Entities per Advertisement
-    ad_identifiers: Dict[int, List[Dict[str, str]]] = {ad.id: [] for ad in ads}
-    for ent in entities:
-        if ent.advertisement_id in ad_identifiers:
-            norm_res = normalize_graph_identifier(ent.entity_type, ent.normalized_value or ent.entity_value)
-            if norm_res:
-                canon_type, canon_val, strength = norm_res
-                ad_identifiers[ent.advertisement_id].append({
-                    "type": canon_type,
-                    "value": canon_val,
-                    "strength": strength
-                })
-
-    # 4. Pairwise Link Analysis with Evidence Strength & Merging Safeguards
-    # We map identifiers to ads to find commonalities
-    identifier_to_ads: Dict[Tuple[str, str], Set[int]] = {}
-    for aid, id_list in ad_identifiers.items():
-        for item in id_list:
-            key = (item["type"], item["value"])
-            if key not in identifier_to_ads:
-                identifier_to_ads[key] = set()
-            identifier_to_ads[key].add(aid)
-
-    # Check for over-connected hub degree to avoid giant component megamerges
-    valid_identifier_to_ads = {
-        k: v for k, v in identifier_to_ads.items()
-        if len(v) <= max_hub_degree
-    }
-
-    # Connect pairwise ads
-    connected_pairs: Dict[Tuple[int, int], List[Dict[str, str]]] = {}
-    for (itype, ival), aid_set in valid_identifier_to_ads.items():
-        if len(aid_set) >= 2:
-            aids = sorted(list(aid_set))
-            for i in range(len(aids)):
-                for j in range(i + 1, len(aids)):
-                    pair = (aids[i], aids[j])
-                    if pair not in connected_pairs:
-                        connected_pairs[pair] = []
-                    connected_pairs[pair].append({"type": itype, "value": ival})
-
-    # Add shared identifier edges between ads
-    for (aid1, aid2), shared_ids in connected_pairs.items():
-        u = f"ad_{aid1}"
-        v = f"ad_{aid2}"
-        if u in ad_node_ids and v in ad_node_ids:
-            strong_count = sum(1 for s in shared_ids if s["type"] in ["PHONE", "UPI_ID", "TELEGRAM", "EMAIL"])
-            if strong_count >= 2:
-                strength = "VERY_HIGH"
-                coord_status = "CONFIRMED_COORDINATION"
-                rel_label = f"Confirmed Syndicate ({len(shared_ids)} Vectors)"
-            elif strong_count == 1:
-                strength = "HIGH"
-                coord_status = "STRONG_LINK"
-                rel_label = f"Shared {shared_ids[0]['type']}: {shared_ids[0]['value']}"
-            else:
-                strength = "MEDIUM"
-                coord_status = "POTENTIALLY_CONNECTED"
-                rel_label = f"Shared Infrastructure: {shared_ids[0]['value']}"
-
-            edge_id = f"edge_coord_{aid1}_{aid2}"
-            G.add_edge(u, v, relationship=coord_status, shared=shared_ids)
-            edges_list.append({
-                "id": edge_id,
-                "source": u,
-                "target": v,
-                "relationship": coord_status,
-                "label": rel_label,
-                "evidence_strength": strength,
-                "coordination_status": coord_status,
-                "shared_identifiers": shared_ids
-            })
+                if edge_id not in edge_keys_seen:
+                    edge_keys_seen.add(edge_id)
+                    G.add_edge(c_node, la_node, relationship="LINKED_CASE")
+                    edges_list.append({
+                        "id": edge_id,
+                        "source": c_node,
+                        "target": la_node,
+                        "relationship": "LINKED_CASE",
+                        "label": "Investigating Case",
+                        "evidence_strength": "HIGH",
+                        "coordination_status": "OFFICIAL_CASE_LINK",
+                        "shared_identifiers": []
+                    })
 
     # 5. Near-Duplicate Campaign Text Links (Weak / Potential Coordination)
     for i in range(len(ads)):
         for j in range(i + 1, len(ads)):
-            pair = (ads[i].id, ads[j].id)
-            # Only test if not already strongly connected
-            if pair not in connected_pairs:
-                ad1 = ads[i]
-                ad2 = ads[j]
-                ratio = fuzz.token_sort_ratio(ad1.normalized_text, ad2.normalized_text)
-                if ratio >= similarity_threshold:
-                    u = f"ad_{ad1.id}"
-                    v = f"ad_{ad2.id}"
-                    edge_id = f"edge_sim_{ad1.id}_{ad2.id}"
+            ad1 = ads[i]
+            ad2 = ads[j]
+            ratio = fuzz.token_sort_ratio(ad1.normalized_text, ad2.normalized_text)
+            if ratio >= similarity_threshold:
+                u = f"ad_{ad1.id}"
+                v = f"ad_{ad2.id}"
+                edge_id = f"edge_sim_{ad1.id}_{ad2.id}"
+                if edge_id not in edge_keys_seen:
+                    edge_keys_seen.add(edge_id)
                     G.add_edge(u, v, relationship="TEXT_SIMILARITY", similarity=ratio)
                     edges_list.append({
                         "id": edge_id,
@@ -287,15 +369,16 @@ def build_threat_graph(
     for idx, comp in enumerate(components):
         if len(comp) >= 2:
             comp_nodes = list(comp)
-            cluster_ads = [ad_map[int(nid.split("_")[1])] for nid in comp_nodes if nid.startswith("ad_")]
-            avg_risk = sum((a.analysis.risk_score if a.analysis else 0.0) for a in cluster_ads) / len(cluster_ads)
-            clusters_summary.append({
-                "cluster_index": idx + 1,
-                "size": len(cluster_ads),
-                "ad_ids": [a.id for a in cluster_ads],
-                "average_risk_score": round(avg_risk, 1),
-                "high_risk_count": sum(1 for a in cluster_ads if (a.analysis and a.analysis.risk_level == "HIGH"))
-            })
+            cluster_ads = [ad_map[int(nid.split("_")[1])] for nid in comp_nodes if nid.startswith("ad_") and int(nid.split("_")[1]) in ad_map]
+            if cluster_ads:
+                avg_risk = sum((a.analysis.risk_score if a.analysis else 0.0) for a in cluster_ads) / len(cluster_ads)
+                clusters_summary.append({
+                    "cluster_index": idx + 1,
+                    "size": len(cluster_ads),
+                    "ad_ids": [a.id for a in cluster_ads],
+                    "average_risk_score": round(avg_risk, 1),
+                    "high_risk_count": sum(1 for a in cluster_ads if (a.analysis and a.analysis.risk_level == "HIGH"))
+                })
 
     clusters_summary.sort(key=lambda x: x["size"], reverse=True)
 

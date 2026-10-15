@@ -32,11 +32,11 @@ export const QuickScanModal: React.FC<QuickScanModalProps> = ({ isOpen, onClose 
     setScanning(true);
     setError(null);
     try {
-      const res = await api.analyzeAd(text.trim(), 'text');
+      const res = await api.analyzeAd(text.trim(), 'text', undefined, platform);
       onClose();
       // Navigate to flagged posts filtered to this scan or open dossier
-      if (res?.id) {
-        navigate(`/flagged-posts?search=${res.id}`);
+      if (res?.custom_id || res?.id) {
+        navigate(`/flagged-posts?search=${encodeURIComponent(res.custom_id || String(res.id))}`);
       } else {
         navigate('/flagged-posts');
       }
@@ -114,9 +114,9 @@ export const QuickScanModal: React.FC<QuickScanModalProps> = ({ isOpen, onClose 
               type="button"
               onClick={() => {
                 onClose();
-                navigate('/scanner');
+                navigate('/scanner', { state: { text, platform } });
               }}
-              className="text-xs text-[var(--muted)] hover:text-[var(--text)] underline"
+              className="text-xs text-[var(--muted)] hover:text-[var(--text)] underline cursor-pointer"
             >
               Open Full Studio Scanner
             </button>

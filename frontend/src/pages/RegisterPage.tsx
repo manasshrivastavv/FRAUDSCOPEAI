@@ -27,7 +27,7 @@ export const RegisterPage: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [role, setRole] = useState<'Investigator' | 'Fraud Analyst'>('Investigator');
+  const [role, setRole] = useState<'Investigator' | 'Fraud Analyst' | 'Developer'>('Investigator');
   const [agreeTerms, setAgreeTerms] = useState(true);
 
   const [showPassword, setShowPassword] = useState(false);
@@ -250,7 +250,7 @@ export const RegisterPage: React.FC = () => {
               <label className="block text-xs font-medium text-[#202124] mb-1">
                 Authorized Role <span className="text-[#C83D4D]">*</span>
               </label>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <button
                   type="button"
                   onClick={() => setRole('Investigator')}
@@ -262,9 +262,9 @@ export const RegisterPage: React.FC = () => {
                 >
                   <div>
                     <p className="font-semibold text-xs">Investigator</p>
-                    <p className="text-[10px] text-[#697386]">Case creation & active inquiries</p>
+                    <p className="text-[10px] text-[#697386]">Case creation & inquiries</p>
                   </div>
-                  {role === 'Investigator' && <Check className="w-4 h-4 text-[#A67C00]" />}
+                  {role === 'Investigator' && <Check className="w-4 h-4 text-[#A67C00] shrink-0" />}
                 </button>
 
                 <button
@@ -278,9 +278,25 @@ export const RegisterPage: React.FC = () => {
                 >
                   <div>
                     <p className="font-semibold text-xs">Fraud Analyst</p>
-                    <p className="text-[10px] text-[#697386]">Scanner triage & pattern review</p>
+                    <p className="text-[10px] text-[#697386]">Scanner triage & analysis</p>
                   </div>
-                  {role === 'Fraud Analyst' && <Check className="w-4 h-4 text-[#A67C00]" />}
+                  {role === 'Fraud Analyst' && <Check className="w-4 h-4 text-[#A67C00] shrink-0" />}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setRole('Developer')}
+                  className={`p-2.5 rounded-lg border text-left flex items-center justify-between text-xs transition-all ${
+                    role === 'Developer'
+                      ? 'border-[#D4AF37] bg-[#FFFDF7] text-[#202124] ring-1 ring-[#D4AF37]'
+                      : 'border-[#E8DDB8] bg-[#FFFFFF] text-[#697386] hover:bg-[#FAF9F6]'
+                  }`}
+                >
+                  <div>
+                    <p className="font-semibold text-xs">Developer</p>
+                    <p className="text-[10px] text-[#697386]">API integration & models</p>
+                  </div>
+                  {role === 'Developer' && <Check className="w-4 h-4 text-[#A67C00] shrink-0" />}
                 </button>
               </div>
               <p className="text-[10px] text-[#697386] mt-1 italic">

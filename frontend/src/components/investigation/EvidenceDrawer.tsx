@@ -18,13 +18,15 @@ import {
   Globe,
   ShieldCheck,
   AlertCircle,
-  ThumbsDown
+  ThumbsDown,
+  Brain
 } from 'lucide-react';
 import { RiskBadge } from '../ui/RiskBadge';
 import { StatusBadge } from '../ui/StatusBadge';
-import { AdvertisementDetail, AdvertisementSummary } from '../../types';
+import { AdvertisementDetail, AdvertisementSummary, InvestigationReport } from '../../types';
 import { api } from '../../services/api';
 import { generateCaseReportPdf } from '../../services/pdfReportGenerator';
+import { AiInvestigationReportModal } from './AiInvestigationReportModal';
 
 interface EvidenceDrawerProps {
   isOpen: boolean;
@@ -128,6 +130,24 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({
         setTimeout(() => setPdfSuccess(false), 4000);
       }
     }, 400);
+  };
+
+  const [aiReport, setAiReport] = useState<InvestigationReport | null>(null);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [loadingAiReport, setLoadingAiReport] = useState(false);
+
+  const handleOpenAiReport = async () => {
+    if (!ad) return;
+    setLoadingAiReport(true);
+    try {
+      const rep = await api.generateInvestigationReport({ advertisement_id: ad.id });
+      setAiReport(rep);
+      setIsReportModalOpen(true);
+    } catch (err: any) {
+      alert('Failed to generate AI report: ' + (err.message || 'Unknown error'));
+    } finally {
+      setLoadingAiReport(false);
+    }
   };
 
   // Multilingual suspicious phrases to highlight
@@ -293,6 +313,17 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({
               </button>
 
               <button
+                type="button"
+                onClick={handleOpenAiReport}
+                disabled={loadingAiReport}
+                className="btn-secondary text-xs flex items-center gap-1.5 py-1 px-3 text-cyan-600 border-cyan-500/40 hover:bg-cyan-50 dark:hover:bg-cyan-950/30"
+                title="Inspect full 11-section structured AI Investigation Report"
+              >
+                <Brain className={`w-3.5 h-3.5 ${loadingAiReport ? 'animate-spin' : ''}`} />
+                <span>{loadingAiReport ? 'Generating...' : 'AI Report'}</span>
+              </button>
+
+              <button
                 onClick={handleExportPdf}
                 disabled={pdfGenerating}
                 className="btn-primary text-xs flex items-center gap-1.5 py-1 px-3"
@@ -338,6 +369,37 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({
               <div className="p-2.5 rounded-[var(--radius)] bg-[var(--card)] border border-[var(--border)] text-xs text-[var(--muted)] leading-relaxed">
                 <span className="font-mono font-bold text-[var(--text)] block mb-0.5">Model Reasoning:</span>
                 {detail.analysis.explanation}
+              </div>
+            )}
+
+            {/* Dataset Replay Provenance & Ground Truth */}
+            {(currentAd.data_source === 'DATASET_REPLAY' || (detail?.evidence_items && detail.evidence_items.some((ev: any) => ev.evidence_type === 'DATASET_GROUND_TRUTH'))) && (
+              <div className="p-3 rounded-[var(--radius)] bg-[#FFF7ED] border border-[#FED7AA] text-xs space-y-1.5 font-sans">
+                <div className="flex items-center justify-between font-mono">
+                  <span className="font-bold text-[#C2410C] flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-[#EA580C] animate-pulse" />
+                    DATASET PROVENANCE & GROUND TRUTH
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-white text-[#C2410C] border border-[#FED7AA] font-bold">
+                    REPLAY FEED
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-[#9A3412] pt-1">
+                  <div>
+                    <span className="text-[#C2410C]/70">Event ID: </span>
+                    <span className="font-bold">{currentAd.external_id || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-[#C2410C]/70">Provenance: </span>
+                    <span className="font-bold">JSONL / CSV Dataset</span>
+                  </div>
+                </div>
+                {detail?.evidence_items && detail.evidence_items.filter((ev: any) => ev.evidence_type === 'DATASET_GROUND_TRUTH').map((ev: any, idx: number) => (
+                  <div key={idx} className="p-2 rounded bg-white/80 border border-[#FED7AA] text-[11px] text-[#7C2D12] space-y-0.5">
+                    <div className="font-bold font-mono">{ev.matched_text}</div>
+                    <div className="text-[10px] text-[#9A3412] leading-tight">{ev.description}</div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -474,6 +536,13 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({
             Close Dossier
           </button>
         </div>
+
+        {/* Full AI Investigation Report Modal (11 sections) */}
+        <AiInvestigationReportModal
+          report={aiReport}
+          isOpen={isReportModalOpen}
+          onClose={() => setIsReportModalOpen(false)}
+        />
       </div>
     </div>
   );

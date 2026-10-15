@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Globe,
@@ -17,7 +17,8 @@ import {
   CheckCircle,
   XCircle,
   Cpu,
-  ArrowUpRight
+  ArrowUpRight,
+  Loader2
 } from 'lucide-react';
 import { api } from '../services/api';
 import { ExplainableVerdictCard } from '../components/investigation/ExplainableVerdictCard';
@@ -32,6 +33,7 @@ export const WebsiteXRayPage: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [xrayResult, setXrayResult] = useState<any | null>(null);
   const [savedCaseRef, setSavedCaseRef] = useState<string | undefined>(undefined);
+  const resultRef = useRef<HTMLDivElement>(null);
 
   const samplePresets = [
     {
@@ -58,6 +60,7 @@ export const WebsiteXRayPage: React.FC = () => {
 
     setInspecting(true);
     setErrorMsg(null);
+    setXrayResult(null);
     setSavedCaseRef(undefined);
 
     try {
@@ -66,6 +69,9 @@ export const WebsiteXRayPage: React.FC = () => {
       if (data.saved_case_ref) {
         setSavedCaseRef(data.saved_case_ref);
       }
+      setTimeout(() => {
+        resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
     } catch (err: any) {
       setErrorMsg(err.message || 'Website X-Ray inspection failed.');
     } finally {
@@ -213,7 +219,16 @@ export const WebsiteXRayPage: React.FC = () => {
         </form>
       </div>
 
-      {/* 3. Error Banner */}
+      {/* 3. Loading Indicator */}
+      {inspecting && (
+        <div className="p-8 rounded-[var(--radius)] bg-[var(--card)] border border-[var(--border)] text-center space-y-3 shadow-xs animate-in fade-in">
+          <Loader2 className="w-6 h-6 animate-spin text-[var(--primary)] mx-auto" />
+          <p className="text-xs font-semibold text-[var(--text)]">Safely inspecting remote webpage and collecting TLS telemetry...</p>
+          <p className="text-[11px] text-[var(--muted)]">Performing SSRF mitigation, TLS validation, form extraction, and behavioral risk scoring.</p>
+        </div>
+      )}
+
+      {/* 4. Error Banner */}
       {errorMsg && (
         <div className="p-4 rounded-[var(--radius)] bg-[#FDE8E8] border border-[#F8B4B6] text-xs text-[#A8341C] font-mono flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -221,9 +236,9 @@ export const WebsiteXRayPage: React.FC = () => {
         </div>
       )}
 
-      {/* 4. Inspection Report */}
+      {/* 5. Inspection Report */}
       {xrayResult && (
-        <div className="space-y-6">
+        <div ref={resultRef} className="space-y-6 animate-in fade-in duration-200">
           {/* Safe Fetch Status & Network Telemetry */}
           <div className="rounded-[var(--radius)] bg-[var(--card)] border border-[var(--border)] p-5 shadow-xs space-y-4">
             <div className="flex items-center justify-between border-b border-[var(--border)] pb-3">
@@ -232,14 +247,14 @@ export const WebsiteXRayPage: React.FC = () => {
               </span>
               <span
                 className={`text-xs font-mono font-bold px-2.5 py-0.5 rounded uppercase ${
-                  xrayResult.fetch_status === 'SUCCESS'
+                  (xrayResult.scan_status || xrayResult.fetch_status) === 'SUCCESS'
                     ? 'bg-[#E6F7F0] text-[#1D6B4F] border border-[#A3E3CB]'
-                    : xrayResult.fetch_status === 'SSRF_BLOCKED'
+                    : (xrayResult.scan_status || xrayResult.fetch_status) === 'BLOCKED' || xrayResult.fetch_status === 'SSRF_BLOCKED'
                     ? 'bg-[#FDE8E8] text-[#A8341C] border border-[#F8B4B6]'
                     : 'bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]'
                 }`}
               >
-                {xrayResult.fetch_status}
+                {xrayResult.scan_status || xrayResult.fetch_status}
               </span>
             </div>
 
@@ -254,14 +269,30 @@ export const WebsiteXRayPage: React.FC = () => {
               <div className="p-3 rounded bg-[var(--bg)] border border-[var(--border)]">
                 <span className="text-[var(--muted)] block text-[10px] uppercase">HTTP Status Code:</span>
                 <strong className="text-[var(--text)]">
-                  {xrayResult.status_code || 'N/A'}
+                  {xrayResult.status_code !== null && xrayResult.status_code !== undefined
+                    ? xrayResult.status_code
+                    : xrayResult.tls_status === 'FAILED'
+                    ? 'N/A (TLS Rejection)'
+                    : 'N/A'}
                 </strong>
               </div>
 
               <div className="p-3 rounded bg-[var(--bg)] border border-[var(--border)]">
-                <span className="text-[var(--muted)] block text-[10px] uppercase">HTTPS / Transport:</span>
-                <strong className={xrayResult.security_headers?.has_https ? 'text-[#2FA97C]' : 'text-[#E5484D]'}>
-                  {xrayResult.security_headers?.has_https ? 'ENCRYPTED (TLS)' : 'INSECURE (HTTP)'}
+                <span className="text-[var(--muted)] block text-[10px] uppercase">Transport Security:</span>
+                <strong
+                  className={
+                    xrayResult.tls_status === 'VERIFIED'
+                      ? 'text-[#2FA97C]'
+                      : xrayResult.tls_status === 'FAILED'
+                      ? 'text-[#E5484D]'
+                      : xrayResult.tls_status === 'UNVERIFIED'
+                      ? 'text-[#F5A524]'
+                      : xrayResult.security_headers?.has_https
+                      ? 'text-[#2FA97C]'
+                      : 'text-[#E5484D]'
+                  }
+                >
+                  {xrayResult.actual_transport || (xrayResult.security_headers?.has_https ? 'HTTPS (TLS)' : 'HTTP (Unencrypted)')}
                 </strong>
               </div>
 
@@ -273,7 +304,32 @@ export const WebsiteXRayPage: React.FC = () => {
               </div>
             </div>
 
-            {xrayResult.error_detail && (
+            {/* TLS Certificate Rejection Banner */}
+            {xrayResult.tls_error && (
+              <div className="p-3.5 rounded-[var(--radius)] bg-[#FDE8E8] border border-[#F8B4B6] text-xs font-mono text-[#A8341C] flex items-start gap-2.5">
+                <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="block font-bold">TLS Certificate Verification Failed</strong>
+                  <span>{xrayResult.tls_error}</span>
+                  <p className="text-[11px] text-[#A8341C]/80 mt-1 font-sans">
+                    Strict certificate verification prevents connecting to servers with invalid, expired, self-signed, or mismatched certificates.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Reason Incomplete Banner */}
+            {xrayResult.risk_assessment?.reason_incomplete && !xrayResult.tls_error && (
+              <div className="p-3.5 rounded-[var(--radius)] bg-[#FEF3C7] border border-[#FDE68A] text-xs font-mono text-[#92400E] flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="block font-bold">Investigation Incomplete — Verdict Inconclusive</strong>
+                  <span>{xrayResult.risk_assessment.reason_incomplete}</span>
+                </div>
+              </div>
+            )}
+
+            {xrayResult.error_detail && !xrayResult.tls_error && !xrayResult.risk_assessment?.reason_incomplete && (
               <div className="p-3 rounded bg-[var(--bg)] border border-[var(--border)] text-xs text-[var(--muted)] font-mono">
                 <span className="font-bold text-[var(--text)]">Notice:</span> {xrayResult.error_detail}
               </div>
@@ -327,10 +383,15 @@ export const WebsiteXRayPage: React.FC = () => {
 
           {/* Explainable Fraud Verdict */}
           <ExplainableVerdictCard
-            riskScore={xrayResult.risk_assessment?.risk_score ?? 0}
-            riskLevel={xrayResult.risk_assessment?.risk_level ?? 'LOW'}
+            riskScore={xrayResult.risk_assessment?.risk_score ?? null}
+            riskLevel={xrayResult.risk_assessment?.risk_level ?? 'INCONCLUSIVE'}
             verdictSummary={xrayResult.risk_assessment?.verdict_summary || 'Website X-Ray inspection finished.'}
             sourceTarget={xrayResult.normalized_url || xrayResult.url}
+            provisionalScore={xrayResult.risk_assessment?.provisional_risk_score ?? null}
+            reasonIncomplete={xrayResult.risk_assessment?.reason_incomplete ?? null}
+            checks={xrayResult.checks || []}
+            checksCompleted={xrayResult.checks_completed || []}
+            checksUnavailable={xrayResult.checks_unavailable || []}
             ruleIndicators={(xrayResult.detected_signals || []).map((sig: any) => ({
               category: sig.category,
               severity: sig.severity,
@@ -344,20 +405,11 @@ export const WebsiteXRayPage: React.FC = () => {
               status: xrayResult.url_analysis?.reputation_status || 'check_unavailable',
               detail: 'External reputation check was not run because commercial API key is unconfigured.',
             }}
-            checksCompleted={[
-              { check: 'Safe DNS Resolution & Anti-SSRF', status: 'COMPLETED', result: 'Private loopback check passed' },
-              { check: 'Sandboxed HTTP Fetch (1MB limit)', status: 'COMPLETED', result: `Status: ${xrayResult.status_code || 'N/A'}` },
-              { check: 'HTML Metadata & Visible Text Extraction', status: 'COMPLETED', result: 'Parsed text body' },
-              { check: 'Financial Fraud Heuristic Rules', status: 'COMPLETED', result: `${xrayResult.detected_signals?.length || 0} signals identified` },
-              { check: 'TF-IDF + Balanced Logistic Regression Model', status: 'COMPLETED', result: `Class: ${xrayResult.ml_analysis?.model_class || 'safe'}` },
-            ]}
-            checksUnavailable={[
-              { check: 'JavaScript Dynamic Rendering (SPA)', status: 'UNAVAILABLE', reason: 'Headless Chrome execution disabled for backend security & resource safety' },
-              { check: 'Authenticated Behind-Login Content', status: 'UNAVAILABLE', reason: 'Credentials not submitted without explicit authorization' },
-            ]}
             recommendedSteps={[
               xrayResult.risk_assessment?.risk_level === 'HIGH'
                 ? 'Issue threat alert and file case report for infrastructure takedown.'
+                : xrayResult.risk_assessment?.risk_level === 'INCONCLUSIVE'
+                ? 'Attempt manual forensic reachability diagnostics in an isolated sandbox.'
                 : 'Monitor domain for subsequent changes in financial promotion phrasing.',
               'Cross-reference referenced phone numbers and UPI VPAs with Network Detective graph.'
             ]}

@@ -43,9 +43,9 @@ export function App() {
               {/* Module 2: Website X-Ray */}
               <Route path="/website-xray" element={<WebsiteXRayPage />} />
 
-              {/* Module 3: Advertisement & Message Analysis */}
-              <Route path="/ad-scanner" element={<ScannerPage />} />
-              <Route path="/scanner" element={<Navigate to="/ad-scanner" replace />} />
+              {/* Studio Scanner (Ad & Message Scanner) */}
+              <Route path="/scanner" element={<ScannerPage />} />
+              <Route path="/ad-scanner" element={<Navigate to="/scanner" replace />} />
 
               {/* Flagged Posts & Investigation Dossiers */}
               <Route path="/flagged-posts" element={<AdvertisementsPage />} />

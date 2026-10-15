@@ -276,13 +276,15 @@ def test_website_xray_ssrf_blocked_safely():
 
 
 def test_website_xray_content_unavailable_handling():
-    """Verify unreachable websites return CONTENT_UNAVAILABLE without crashing."""
+    """Verify unreachable websites return INCOMPLETE without crashing and verdict is INCONCLUSIVE."""
     res = client.post("/api/scanner/xray", json={"url": "https://unreachable-fake-domain-9992384.invalid"})
     assert res.status_code == 200
     data = res.json()
-    assert data["fetch_status"] == "CONTENT_UNAVAILABLE"
+    assert data["scan_status"] == "INCOMPLETE"
+    assert data["fetch_status"] in ["INCOMPLETE", "CONTENT_UNAVAILABLE"]
     assert "error_detail" in data
-    assert data["risk_assessment"]["risk_score"] is not None
+    assert data["risk_assessment"]["verdict"] == "INCONCLUSIVE"
+    assert data["risk_assessment"]["is_conclusive"] is False
 
 
 def test_website_xray_public_example_domain():

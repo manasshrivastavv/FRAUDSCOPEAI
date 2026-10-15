@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   ScanSearch,
   Upload,
@@ -22,22 +22,39 @@ import {
   Camera,
   Share2,
   Edit3,
-  FileText
+  FileText,
+  Brain,
+  Loader2
 } from 'lucide-react';
 import { api } from '../services/api';
-import { AdvertisementDetail } from '../types';
+import { AdvertisementDetail, InvestigationReport } from '../types';
 import { RiskBadge } from '../components/ui/RiskBadge';
 import { ExplainableVerdictCard } from '../components/investigation/ExplainableVerdictCard';
+import { AiInvestigationReportModal } from '../components/investigation/AiInvestigationReportModal';
 import { generateCaseReportPdf } from '../services/pdfReportGenerator';
 
 export const ScannerPage: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const stateData = (location.state || {}) as { text?: string; platform?: string; url?: string };
 
   // Input states
   const [activeInputTab, setActiveInputTab] = useState<'text' | 'image'>('text');
-  const [textContent, setTextContent] = useState('');
-  const [platform, setPlatform] = useState('Telegram');
-  const [submittedUrl, setSubmittedUrl] = useState('');
+  const [textContent, setTextContent] = useState(stateData.text || '');
+  const [platform, setPlatform] = useState(stateData.platform || 'Telegram');
+  const [submittedUrl, setSubmittedUrl] = useState(stateData.url || '');
+
+  useEffect(() => {
+    if (stateData.text) {
+      setTextContent(stateData.text);
+    }
+    if (stateData.platform) {
+      setPlatform(stateData.platform);
+    }
+    if (stateData.url) {
+      setSubmittedUrl(stateData.url);
+    }
+  }, [location.state]);
 
   // OCR and File Upload
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -49,6 +66,7 @@ export const ScannerPage: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [result, setResult] = useState<AdvertisementDetail | null>(null);
   const [savedCaseRef, setSavedCaseRef] = useState<string | undefined>(undefined);
+  const resultRef = useRef<HTMLDivElement>(null);
 
   // Multilingual sample presets matching FinGuard AI targets (English, Hindi, Hinglish)
   const samplePresets = [
@@ -110,6 +128,9 @@ export const ScannerPage: React.FC = () => {
       );
       res.platform_detected = platform;
       setResult(res);
+      setTimeout(() => {
+        resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
     } catch (err: any) {
       setErrorMsg(err.message || 'Analysis failed. Please check backend connection.');
     } finally {
@@ -172,6 +193,24 @@ export const ScannerPage: React.FC = () => {
     generateCaseReportPdf(result, {
       analystNotes: 'Generated following advertisement triage. Evidence-based scoring and entities logged for investigation.',
     });
+  };
+
+  const [aiReport, setAiReport] = useState<InvestigationReport | null>(null);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [generatingReport, setGeneratingReport] = useState(false);
+
+  const handleOpenAiReport = async () => {
+    if (!result) return;
+    setGeneratingReport(true);
+    try {
+      const rep = await api.generateInvestigationReport({ advertisement_id: result.id });
+      setAiReport(rep);
+      setIsReportModalOpen(true);
+    } catch (err: any) {
+      alert('Failed to generate AI report: ' + (err.message || 'Unknown error'));
+    } finally {
+      setGeneratingReport(false);
+    }
   };
 
   const handleReset = () => {
@@ -399,7 +438,30 @@ export const ScannerPage: React.FC = () => {
 
       {/* 3. Analysis Results via Explainable Verdict */}
       {result && result.analysis && (
-        <div className="space-y-6">
+        <div ref={resultRef} className="space-y-6 animate-in fade-in duration-200">
+          <div className="p-4 rounded-[var(--radius)] bg-[var(--card)] border border-cyan-800/40 flex items-center justify-between gap-4 shadow-xs">
+            <div className="flex items-center gap-2.5">
+              <Brain className="w-5 h-5 text-cyan-400 shrink-0" />
+              <div>
+                <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-[var(--text)]">
+                  Certified AI Investigation Dossier Available
+                </h4>
+                <p className="text-xs text-[var(--muted)]">
+                  Inspect comprehensive 11-section structured report with calibrated severity, model limitations, and threat evidence.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleOpenAiReport}
+              disabled={generatingReport}
+              className="btn-primary text-xs py-2 px-4 flex items-center gap-2 font-mono font-bold uppercase tracking-wide bg-cyan-700 hover:bg-cyan-600 text-white shrink-0 shadow-xs"
+            >
+              <Brain className={`w-3.5 h-3.5 ${generatingReport ? 'animate-spin' : ''}`} />
+              <span>{generatingReport ? 'Generating...' : 'View Full AI Report'}</span>
+            </button>
+          </div>
+
           <ExplainableVerdictCard
             riskScore={result.analysis.risk_score}
             riskLevel={result.analysis.risk_level}
@@ -468,6 +530,13 @@ export const ScannerPage: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* Full AI Investigation Report Modal (11 sections) */}
+      <AiInvestigationReportModal
+        report={aiReport}
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+      />
     </div>
   );
 };

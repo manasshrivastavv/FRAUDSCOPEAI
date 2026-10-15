@@ -43,13 +43,29 @@ export const RiskBadge: React.FC<RiskBadgeProps> = ({
       icon: ShieldCheck,
       label: 'Low risk',
     },
+    INCONCLUSIVE: {
+      bg: 'bg-[#F3F4F6]',
+      border: 'border-[#D1D5DB]',
+      text: 'text-[#4B5563]',
+      dot: 'bg-[#9CA3AF]',
+      icon: AlertTriangle,
+      label: 'Inconclusive',
+    },
+    BLOCKED: {
+      bg: 'bg-[#FDE8E8]',
+      border: 'border-[#F8B4B6]',
+      text: 'text-[#A8341C]',
+      dot: 'bg-[#E5484D]',
+      icon: ShieldAlert,
+      label: 'Access Blocked',
+    },
   }[normLevel] || {
     bg: 'bg-[#FBF7EE]',
     border: 'border-[#D9CFBA]',
     text: 'text-[#6F675B]',
     dot: 'bg-[#6F675B]',
-    icon: ShieldCheck,
-    label: 'Unrated',
+    icon: AlertTriangle,
+    label: 'Inconclusive',
   };
 
   const Icon = config.icon;

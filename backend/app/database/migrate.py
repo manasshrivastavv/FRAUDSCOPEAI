@@ -23,6 +23,22 @@ for db_p in db_paths:
         if "data_source" not in ad_cols:
             cur.execute("ALTER TABLE advertisements ADD COLUMN data_source VARCHAR(32) DEFAULT 'LIVE_SCAN'")
             print("  + Added column 'data_source' to advertisements")
+        if "advertiser_name" not in ad_cols:
+            cur.execute("ALTER TABLE advertisements ADD COLUMN advertiser_name VARCHAR(128)")
+            print("  + Added column 'advertiser_name' to advertisements")
+        if "external_id" not in ad_cols:
+            cur.execute("ALTER TABLE advertisements ADD COLUMN external_id VARCHAR(128)")
+            print("  + Added column 'external_id' to advertisements")
+        if "raw_metadata" not in ad_cols:
+            cur.execute("ALTER TABLE advertisements ADD COLUMN raw_metadata TEXT")
+            print("  + Added column 'raw_metadata' to advertisements")
+
+        # Check users table
+        cur.execute("PRAGMA table_info(users)")
+        user_cols = [r[1] for r in cur.fetchall()]
+        if "avatar_url" not in user_cols:
+            cur.execute("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512)")
+            print("  + Added column 'avatar_url' to users")
 
         # Check analysis_results table
         cur.execute("PRAGMA table_info(analysis_results)")

@@ -140,12 +140,13 @@ def inspect_website_xray(payload: WebsiteXRayRequest, db: Session = Depends(get_
     if payload.save_as_case and report.get("fetch_status") != "SSRF_BLOCKED":
         short_id = uuid.uuid4().hex[:6].upper()
         case_ref = f"CASE-{datetime.now().strftime('%Y')}-{short_id}"
-        risk_level = report.get("risk_assessment", {}).get("risk_level", "LOW")
+        risk_level = report.get("risk_assessment", {}).get("risk_level", "INCONCLUSIVE")
+        case_priority = "HIGH" if risk_level == "HIGH" else ("MEDIUM" if risk_level in ("MEDIUM", "INCONCLUSIVE") else "LOW")
         case = Case(
             case_ref=case_ref,
             title=f"Website X-Ray: {report.get('domain', raw_url)}",
             description=f"Website X-Ray inspection of {raw_url}. Verdict: {report.get('risk_assessment', {}).get('verdict_summary')}",
-            priority="HIGH" if risk_level == "HIGH" else ("MEDIUM" if risk_level == "MEDIUM" else "LOW"),
+            priority=case_priority,
             status="OPEN",
             assigned_to="Analyst Alpha"
         )

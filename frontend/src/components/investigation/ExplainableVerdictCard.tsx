@@ -17,10 +17,17 @@ import {
 import { RiskBadge } from '../ui/RiskBadge';
 
 export interface ExplainableVerdictProps {
-  riskScore: number;
-  riskLevel: 'HIGH' | 'MEDIUM' | 'LOW' | string;
+  riskScore: number | null;
+  riskLevel: 'HIGH' | 'MEDIUM' | 'LOW' | 'INCONCLUSIVE' | 'BLOCKED' | string;
   verdictSummary: string;
   sourceTarget: string;
+  provisionalScore?: number | null;
+  reasonIncomplete?: string | null;
+  checks?: Array<{
+    name: string;
+    status: 'Passed' | 'Failed' | 'Not Evaluated' | 'Unavailable' | string;
+    details: string;
+  }>;
   observedEvidence?: Array<{
     type: string;
     value: string;
@@ -71,6 +78,9 @@ export const ExplainableVerdictCard: React.FC<ExplainableVerdictProps> = ({
   riskLevel,
   verdictSummary,
   sourceTarget,
+  provisionalScore,
+  reasonIncomplete,
+  checks = [],
   observedEvidence = [],
   modelAnalysis,
   ruleIndicators = [],
@@ -85,10 +95,17 @@ export const ExplainableVerdictCard: React.FC<ExplainableVerdictProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'evidence' | 'model' | 'rules' | 'audit'>('evidence');
 
-  const normalizedLevel = riskLevel.toUpperCase() as 'HIGH' | 'MEDIUM' | 'LOW';
+  const normalizedLevel = (riskLevel || 'INCONCLUSIVE').toUpperCase();
+  const isInconclusive = normalizedLevel === 'INCONCLUSIVE' || riskScore === null || riskScore === undefined;
 
   const riskColor =
-    normalizedLevel === 'HIGH' ? '#E5484D' : normalizedLevel === 'MEDIUM' ? '#F5A524' : '#2FA97C';
+    normalizedLevel === 'HIGH' || normalizedLevel === 'BLOCKED'
+      ? '#E5484D'
+      : normalizedLevel === 'MEDIUM'
+      ? '#F5A524'
+      : normalizedLevel === 'LOW'
+      ? '#2FA97C'
+      : '#6B7280'; // Slate grey for Inconclusive / Unknown
 
   return (
     <div className="rounded-[var(--radius)] bg-[var(--card)] border border-[var(--border)] shadow-sm overflow-hidden text-[var(--text)] transition-all">
@@ -105,16 +122,21 @@ export const ExplainableVerdictCard: React.FC<ExplainableVerdictProps> = ({
               }}
             >
               <span className="text-xl sm:text-2xl font-bold font-mono tracking-tight" style={{ color: riskColor }}>
-                {Math.round(riskScore)}
+                {!isInconclusive && riskScore !== null ? Math.round(riskScore) : '—'}
               </span>
-              <span className="text-[10px] font-mono uppercase text-[var(--muted)] font-semibold -mt-1">
-                / 100
+              <span className="text-[9px] font-mono uppercase text-[var(--muted)] font-semibold -mt-0.5">
+                {!isInconclusive && riskScore !== null ? '/ 100' : 'Inconclusive'}
               </span>
             </div>
 
             <div>
               <div className="flex items-center gap-2.5 mb-1">
-                <RiskBadge level={normalizedLevel} size="md" />
+                <RiskBadge level={normalizedLevel} score={riskScore} size="md" />
+                {provisionalScore !== undefined && provisionalScore !== null && isInconclusive && (
+                  <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-[#FEF3D6] text-[#8A5A00] border border-[#FCD888]">
+                    Provisional: {Math.round(provisionalScore)}/100
+                  </span>
+                )}
                 <span className="text-xs font-mono text-[var(--muted)] truncate max-w-xs sm:max-w-md">
                   Target: <strong className="text-[var(--text)]">{sourceTarget}</strong>
                 </span>
@@ -125,6 +147,12 @@ export const ExplainableVerdictCard: React.FC<ExplainableVerdictProps> = ({
               <p className="text-xs text-[var(--muted)] mt-0.5 max-w-2xl leading-relaxed">
                 {verdictSummary}
               </p>
+              {reasonIncomplete && (
+                <div className="mt-2 text-xs font-mono px-3 py-1.5 rounded bg-[#FEF3C7] border border-[#FDE68A] text-[#92400E] flex items-center gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  <span><strong>Scan Incomplete:</strong> {reasonIncomplete} (Missing content is never treated as proof of safety)</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -352,40 +380,110 @@ export const ExplainableVerdictCard: React.FC<ExplainableVerdictProps> = ({
         {/* TAB 4: AUDIT CHECKS & LIMITATIONS */}
         {activeTab === 'audit' && (
           <div className="space-y-4">
-            <div>
-              <h3 className="font-bold text-[var(--text)] font-mono uppercase text-[11px] mb-2">
-                Completed Technical Checks:
-              </h3>
+            {checks && checks.length > 0 ? (
               <div className="space-y-2">
-                {checksCompleted.map((c, i) => (
-                  <div key={i} className="p-2.5 rounded bg-[#FFFFFF] border border-[var(--border)] flex items-center justify-between text-xs font-mono">
-                    <span className="flex items-center gap-2 text-[var(--text)]">
-                      <CheckCircle className="w-3.5 h-3.5 text-[#2FA97C] shrink-0" />
-                      <span>{c.check}</span>
-                    </span>
-                    <span className="text-[var(--muted)] truncate max-w-xs">{c.result}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {checksUnavailable.length > 0 && (
-              <div>
-                <h3 className="font-bold text-[var(--muted)] font-mono uppercase text-[11px] mb-2">
-                  Unavailable Checks & Limitations:
-                </h3>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-bold text-[var(--text)] font-mono uppercase text-[11px]">
+                    Technical Inspection & Defense Verification:
+                  </h3>
+                  <span className="text-[11px] font-mono text-[var(--muted)]">
+                    {checks.filter((c) => c.status === 'Passed').length} Passed · {checks.filter((c) => c.status === 'Failed').length} Failed · {checks.filter((c) => c.status === 'Not Evaluated').length} Not Evaluated
+                  </span>
+                </div>
                 <div className="space-y-2">
-                  {checksUnavailable.map((u, i) => (
-                    <div key={i} className="p-2.5 rounded bg-[var(--bg)] border border-[var(--border)] flex items-center justify-between text-xs font-mono text-[var(--muted)]">
-                      <span className="flex items-center gap-2">
-                        <HelpCircle className="w-3.5 h-3.5 text-[#F5A524] shrink-0" />
-                        <span>{u.check}</span>
-                      </span>
-                      <span className="text-[11px] italic">{u.reason}</span>
-                    </div>
-                  ))}
+                  {checks.map((c, i) => {
+                    const statusConfig = {
+                      Passed: {
+                        icon: CheckCircle,
+                        iconColor: 'text-[#2FA97C]',
+                        badgeBg: 'bg-[#E6F7F0]',
+                        badgeText: 'text-[#1D6B4F]',
+                        badgeBorder: 'border-[#A3E3CB]',
+                      },
+                      Failed: {
+                        icon: XCircle,
+                        iconColor: 'text-[#E5484D]',
+                        badgeBg: 'bg-[#FDE8E8]',
+                        badgeText: 'text-[#A8341C]',
+                        badgeBorder: 'border-[#F8B4B6]',
+                      },
+                      Unavailable: {
+                        icon: AlertTriangle,
+                        iconColor: 'text-[#F5A524]',
+                        badgeBg: 'bg-[#FEF3D6]',
+                        badgeText: 'text-[#8A5A00]',
+                        badgeBorder: 'border-[#FCD888]',
+                      },
+                    }[c.status] || {
+                      icon: HelpCircle,
+                      iconColor: 'text-[#6B7280]',
+                      badgeBg: 'bg-[#F3F4F6]',
+                      badgeText: 'text-[#4B5563]',
+                      badgeBorder: 'border-[#D1D5DB]',
+                    };
+
+                    const IconComp = statusConfig.icon;
+
+                    return (
+                      <div
+                        key={i}
+                        className="p-3 rounded bg-[#FFFFFF] border border-[var(--border)] flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-mono"
+                      >
+                        <div className="flex items-start sm:items-center gap-2">
+                          <IconComp className={`w-4 h-4 shrink-0 mt-0.5 sm:mt-0 ${statusConfig.iconColor}`} />
+                          <div>
+                            <span className="font-bold text-[var(--text)]">{c.name}</span>
+                            <p className="text-[11px] text-[var(--muted)] font-normal mt-0.5">{c.details}</p>
+                          </div>
+                        </div>
+                        <span
+                          className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border uppercase self-start sm:self-center shrink-0 ${statusConfig.badgeBg} ${statusConfig.badgeText} ${statusConfig.badgeBorder}`}
+                        >
+                          {c.status}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
+            ) : (
+              <>
+                <div>
+                  <h3 className="font-bold text-[var(--text)] font-mono uppercase text-[11px] mb-2">
+                    Completed Technical Checks:
+                  </h3>
+                  <div className="space-y-2">
+                    {checksCompleted.map((c, i) => (
+                      <div key={i} className="p-2.5 rounded bg-[#FFFFFF] border border-[var(--border)] flex items-center justify-between text-xs font-mono">
+                        <span className="flex items-center gap-2 text-[var(--text)]">
+                          <CheckCircle className="w-3.5 h-3.5 text-[#2FA97C] shrink-0" />
+                          <span>{c.check}</span>
+                        </span>
+                        <span className="text-[var(--muted)] truncate max-w-xs">{c.result}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {checksUnavailable.length > 0 && (
+                  <div>
+                    <h3 className="font-bold text-[var(--muted)] font-mono uppercase text-[11px] mb-2">
+                      Unavailable Checks & Limitations:
+                    </h3>
+                    <div className="space-y-2">
+                      {checksUnavailable.map((u, i) => (
+                        <div key={i} className="p-2.5 rounded bg-[var(--bg)] border border-[var(--border)] flex items-center justify-between text-xs font-mono text-[var(--muted)]">
+                          <span className="flex items-center gap-2">
+                            <HelpCircle className="w-3.5 h-3.5 text-[#F5A524] shrink-0" />
+                            <span>{u.check}</span>
+                          </span>
+                          <span className="text-[11px] italic">{u.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
