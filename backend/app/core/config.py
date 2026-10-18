@@ -36,7 +36,7 @@ class Settings(BaseModel):
     RISK_THRESHOLD_LOW: int = int(os.getenv("RISK_THRESHOLD_LOW", "35"))
     RISK_THRESHOLD_HIGH: int = int(os.getenv("RISK_THRESHOLD_HIGH", "65"))
     SIMILARITY_THRESHOLD: float = float(os.getenv("SIMILARITY_THRESHOLD", "0.78"))
-    DEMO_MODE: bool = os.getenv("DEMO_MODE", "true").lower() in ("true", "1", "yes")
+    DEMO_MODE: bool = os.getenv("DEMO_MODE", "false").lower() in ("true", "1", "yes")
     
     # Authentication
     SECRET_KEY: str = os.getenv("SECRET_KEY", "fraudscope-ai-production-grade-secret-key-2026-finguard")

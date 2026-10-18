@@ -34,46 +34,47 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
 
     # SQLite schema compatibility: ensure all columns exist across tables
-    try:
-        with engine.connect() as conn:
-            # Table: advertisements
-            ad_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(advertisements)")).fetchall()]
-            if "advertiser_name" not in ad_cols:
-                conn.execute(text("ALTER TABLE advertisements ADD COLUMN advertiser_name VARCHAR(128)"))
-            if "external_id" not in ad_cols:
-                conn.execute(text("ALTER TABLE advertisements ADD COLUMN external_id VARCHAR(128)"))
-            if "raw_metadata" not in ad_cols:
-                conn.execute(text("ALTER TABLE advertisements ADD COLUMN raw_metadata TEXT"))
-            if "is_demo" not in ad_cols:
-                conn.execute(text("ALTER TABLE advertisements ADD COLUMN is_demo BOOLEAN DEFAULT 0"))
-            if "data_source" not in ad_cols:
-                conn.execute(text("ALTER TABLE advertisements ADD COLUMN data_source VARCHAR(32) DEFAULT 'LIVE_SCAN'"))
+    if engine.dialect.name == "sqlite":
+        try:
+            with engine.connect() as conn:
+                # Table: advertisements
+                ad_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(advertisements)")).fetchall()]
+                if "advertiser_name" not in ad_cols:
+                    conn.execute(text("ALTER TABLE advertisements ADD COLUMN advertiser_name VARCHAR(128)"))
+                if "external_id" not in ad_cols:
+                    conn.execute(text("ALTER TABLE advertisements ADD COLUMN external_id VARCHAR(128)"))
+                if "raw_metadata" not in ad_cols:
+                    conn.execute(text("ALTER TABLE advertisements ADD COLUMN raw_metadata TEXT"))
+                if "is_demo" not in ad_cols:
+                    conn.execute(text("ALTER TABLE advertisements ADD COLUMN is_demo BOOLEAN DEFAULT 0"))
+                if "data_source" not in ad_cols:
+                    conn.execute(text("ALTER TABLE advertisements ADD COLUMN data_source VARCHAR(32) DEFAULT 'LIVE_SCAN'"))
 
-            # Table: analysis_results
-            res_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(analysis_results)")).fetchall()]
-            if "model_score" not in res_cols:
-                conn.execute(text("ALTER TABLE analysis_results ADD COLUMN model_score FLOAT"))
-            if "model_version" not in res_cols:
-                conn.execute(text("ALTER TABLE analysis_results ADD COLUMN model_version VARCHAR(64)"))
-            if "model_class" not in res_cols:
-                conn.execute(text("ALTER TABLE analysis_results ADD COLUMN model_class VARCHAR(32)"))
+                # Table: analysis_results
+                res_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(analysis_results)")).fetchall()]
+                if "model_score" not in res_cols:
+                    conn.execute(text("ALTER TABLE analysis_results ADD COLUMN model_score FLOAT"))
+                if "model_version" not in res_cols:
+                    conn.execute(text("ALTER TABLE analysis_results ADD COLUMN model_version VARCHAR(64)"))
+                if "model_class" not in res_cols:
+                    conn.execute(text("ALTER TABLE analysis_results ADD COLUMN model_class VARCHAR(32)"))
 
-            # Table: users
-            user_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(users)")).fetchall()]
-            if "avatar_url" not in user_cols:
-                conn.execute(text("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512)"))
+                # Table: users
+                user_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(users)")).fetchall()]
+                if "avatar_url" not in user_cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512)"))
 
-            conn.commit()
-    except Exception as e:
-        print(f"[Warning] Schema auto-migration notice: {e}")
+                conn.commit()
+        except Exception as e:
+            print(f"[Warning] SQLite schema auto-migration notice: {e}")
     
     # Train or load ML baseline
     get_or_train_model()
 
-    # Seed initial dataset if database is empty
+    # Seed initial dataset if database is empty and demo mode is explicitly enabled
     db = SessionLocal()
     try:
-        seed_database_if_empty(db)
+        seed_database_if_empty(db, seed_demo_records=settings.DEMO_MODE)
     finally:
         db.close()
 
@@ -128,8 +129,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Health Check Endpoint
+# Health Check Endpoints
 @app.get("/api/health")
+@app.get("/health")
 def health_check():
     db_ok = True
     try:
@@ -143,7 +145,7 @@ def health_check():
         "database": "connected" if db_ok else "disconnected",
         "service": settings.PROJECT_NAME,
         "version": settings.VERSION,
-        "mode": "Demonstration"
+        "mode": "Demonstration" if settings.DEMO_MODE else "Production"
     }
 
 # Mount Static Files for User Avatars and Uploads

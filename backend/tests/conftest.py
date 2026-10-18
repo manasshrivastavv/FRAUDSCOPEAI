@@ -11,7 +11,7 @@ def setup_test_db():
     get_or_train_model()
     db = SessionLocal()
     try:
-        seed_database_if_empty(db)
+        seed_database_if_empty(db, seed_demo_records=True)
     finally:
         db.close()
     yield

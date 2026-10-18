@@ -1,5 +1,6 @@
 import os
 import csv
+from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from app.models.models import (
@@ -13,12 +14,16 @@ from app.services.rule_engine import evaluate_rules
 from app.services.model_service import predict_risk
 from app.services.risk_scoring import calculate_composite_risk
 
-def seed_database_if_empty(db: Session):
+def seed_database_if_empty(db: Session, seed_demo_records: Optional[bool] = None):
     """
-    Ensures default administrative / demonstration user exists,
-    and loads sample advertisements if advertisement table is empty.
+    Ensures default administrative / demonstration user and system settings exist.
+    Loads sample demonstration advertisements only if synthetic demo seeding is enabled
+    via seed_demo_records=True or environment variable DEMO_MODE=true.
     """
-    # Seed default demonstration user if users table is empty
+    if seed_demo_records is None:
+        seed_demo_records = os.getenv("DEMO_MODE", "false").lower() in ("true", "1", "yes")
+
+    # 1. Seed default demonstration user if users table is empty
     if db.query(User).count() == 0:
         demo_user = User(
             full_name="Lead Investigator",
@@ -32,8 +37,28 @@ def seed_database_if_empty(db: Session):
         db.add(demo_user)
         db.commit()
 
+    # 2. Default system settings (ensure created even in non-demo mode)
+    default_settings = [
+        ("risk_threshold_low", "35", "Boundary between Low and Medium risk bands (0-100)"),
+        ("risk_threshold_high", "65", "Boundary between Medium and High risk bands (0-100)"),
+        ("similarity_threshold", "0.78", "RapidFuzz token similarity threshold for near duplicates"),
+        ("demo_mode", "true" if seed_demo_records else "false", "Displays DEMO DATA watermark and banners across UI"),
+        ("ml_model_enabled", "true", "Enables Scikit-Learn TF-IDF classifier inference")
+    ]
+    for key, val, desc in default_settings:
+        if not db.query(SystemSetting).filter_by(key=key).first():
+            db.add(SystemSetting(key=key, value=val, description=desc))
+    db.commit()
+
+    # 3. Gate synthetic demonstration records behind DEMO_MODE
+    if not seed_demo_records:
+        print("[SeedData] DEMO_MODE is false (production mode). Skipping synthetic demonstration records seeding.")
+        return
+
+    # 4. Check whether advertisements already exist (preserve existing database records)
     existing_count = db.query(Advertisement).count()
     if existing_count > 0:
+        print(f"[SeedData] Preserving existing database records ({existing_count} advertisements already present).")
         return
 
     csv_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "sample_ads.csv")
@@ -42,18 +67,6 @@ def seed_database_if_empty(db: Session):
         return
 
     print("[SeedData] Seeding database with synthetic demonstration records...")
-
-    # Default system settings
-    default_settings = [
-        ("risk_threshold_low", "35", "Boundary between Low and Medium risk bands (0-100)"),
-        ("risk_threshold_high", "65", "Boundary between Medium and High risk bands (0-100)"),
-        ("similarity_threshold", "0.78", "RapidFuzz token similarity threshold for near duplicates"),
-        ("demo_mode", "true", "Displays DEMO DATA watermark and banners across UI"),
-        ("ml_model_enabled", "true", "Enables Scikit-Learn TF-IDF classifier inference")
-    ]
-    for key, val, desc in default_settings:
-        if not db.query(SystemSetting).filter_by(key=key).first():
-            db.add(SystemSetting(key=key, value=val, description=desc))
 
     ad_id_map = {} # maps custom_id (e.g. AD-DEMO-001) to DB Advertisement object
 
@@ -116,14 +129,18 @@ def seed_database_if_empty(db: Session):
             # Rule evaluation
             rule_res = evaluate_rules(norm_text)
 
-            # ML prediction
-            ml_avail, ml_prob = predict_risk(norm_text)
+            # ML prediction - contract returns:
+            # (model_available, probability_score_0_to_1, predicted_class, model_version, contributing_tokens)
+            ml_avail, ml_prob, ml_class, ml_version, ml_tokens = predict_risk(norm_text)
 
             # Risk scoring
             risk_info = calculate_composite_risk(
                 rule_results=rule_res,
                 model_available=ml_avail,
                 model_signal=ml_prob,
+                model_class=ml_class,
+                model_version=ml_version,
+                model_tokens=ml_tokens,
                 is_duplicate=("006" in custom_id)
             )
 
@@ -134,6 +151,9 @@ def seed_database_if_empty(db: Session):
                 risk_level=risk_info["risk_level"],
                 model_available=ml_avail,
                 model_signal=ml_prob,
+                model_score=risk_info.get("model_score"),
+                model_version=risk_info.get("model_version"),
+                model_class=risk_info.get("model_class"),
                 explanation=risk_info["explanation"],
                 recommended_review_action=risk_info["recommended_review_action"],
                 created_at=created_at
