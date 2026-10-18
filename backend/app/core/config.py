@@ -24,6 +24,20 @@ if not _raw_db_url or _raw_db_url in ("sqlite:///./fraudscope.db", "sqlite:///fr
 else:
     _canonical_db_url = _raw_db_url
 
+_raw_cors = os.getenv("BACKEND_CORS_ORIGINS", "") or os.getenv("CORS_ORIGINS", "")
+_default_cors = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://fraudscopeai.onrender.com",
+]
+if _raw_cors:
+    for _o in _raw_cors.split(","):
+        _cleaned_origin = _o.strip()
+        if _cleaned_origin and _cleaned_origin not in _default_cors:
+            _default_cors.append(_cleaned_origin)
+
 class Settings(BaseModel):
     PROJECT_NAME: str = "FraudScope AI"
     VERSION: str = "1.0.0"
@@ -56,11 +70,6 @@ class Settings(BaseModel):
     TELEGRAM_POLL_INTERVAL: int = int(os.getenv("TELEGRAM_POLL_INTERVAL", "30"))
 
     # CORS
-    BACKEND_CORS_ORIGINS: list[str] = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ]
+    BACKEND_CORS_ORIGINS: list[str] = _default_cors
 
 settings = Settings()

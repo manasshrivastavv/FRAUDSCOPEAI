@@ -1,6 +1,6 @@
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -120,10 +120,21 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Path Normalization Middleware: strip duplicate /api prefixes e.g. /api/api/auth/login -> /api/auth/login
+@app.middleware("http")
+async def normalize_api_path_middleware(request: Request, call_next):
+    path = request.scope.get("path", "")
+    if path.startswith("/api/api/"):
+        while path.startswith("/api/api/"):
+            path = path[4:]
+        request.scope["path"] = path
+    return await call_next(request)
+
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -153,7 +164,8 @@ UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
 os.makedirs(os.path.join(UPLOAD_DIR, "avatars"), exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-# Register API Routers
+# Register API Routers (mounted under /api and root alias for auth resilience)
+app.include_router(auth_router, prefix="")
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(ads_router, prefix=settings.API_V1_STR)
 app.include_router(dashboard_router, prefix=settings.API_V1_STR)

@@ -36,7 +36,7 @@ import {
   Sliders,
   Sparkles
 } from 'lucide-react';
-import { api } from '../services/api';
+import { api, getApiUrl } from '../services/api';
 import { AdvertisementSummary, SourceAdapterTelemetry, EntityChip, ReplayStatus } from '../types';
 import { RiskBadge } from '../components/ui/RiskBadge';
 import { StatusBadge } from '../components/ui/StatusBadge';
@@ -382,8 +382,7 @@ export const AdvertisementsPage: React.FC = () => {
     let sseActive = false;
 
     try {
-      const baseUrl = import.meta.env.VITE_API_URL || '';
-      eventSource = new EventSource(`${baseUrl}/api/ads/live-events`);
+      eventSource = new EventSource(getApiUrl('/api/ads/live-events'));
 
       eventSource.addEventListener('connected', () => {
         setLiveConnected(true);

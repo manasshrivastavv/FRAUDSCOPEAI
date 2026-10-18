@@ -23,7 +23,32 @@ import {
   NotificationListResponse
 } from '../types';
 
-const BASE_URL = import.meta.env.VITE_API_URL || '';
+// Support VITE_API_BASE_URL (standard Vercel/Vite convention) as well as VITE_API_URL or VITE_BACKEND_URL
+const rawBaseUrl = (
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ||
+  (import.meta.env.VITE_API_URL as string | undefined) ||
+  (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
+  ''
+).trim();
+
+// Strip any trailing slashes and any trailing '/api' suffix so `${BASE_URL}/api/...` never produces duplicate `/api/api/...`
+export const BASE_URL = rawBaseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
+
+/**
+ * Resolves an API endpoint against BASE_URL, guaranteeing exactly one '/api' prefix
+ * and preventing duplicate '/api/api' paths or malformed slashes.
+ */
+export function getApiUrl(endpoint: string): string {
+  let cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  // Remove duplicate leading /api prefixes if present e.g. /api/api/ -> /api/
+  while (cleanEndpoint.startsWith('/api/api/')) {
+    cleanEndpoint = cleanEndpoint.substring(4);
+  }
+  const apiPath = (cleanEndpoint.startsWith('/api/') || cleanEndpoint === '/api')
+    ? cleanEndpoint
+    : `/api${cleanEndpoint}`;
+  return `${BASE_URL}${apiPath}`;
+}
 
 let authToken: string | null = typeof window !== 'undefined' ? localStorage.getItem('fraudscope_token') : null;
 
@@ -41,7 +66,7 @@ export const setAuthToken = (token: string | null) => {
 export const getAuthToken = () => authToken;
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${BASE_URL}${endpoint}`;
+  const url = getApiUrl(endpoint);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...((options.headers as Record<string, string>) || {}),
@@ -71,7 +96,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 }
 
 async function requestMultipart<T>(endpoint: string, formData: FormData): Promise<T> {
-  const url = `${BASE_URL}${endpoint}`;
+  const url = getApiUrl(endpoint);
   const headers: Record<string, string> = {};
 
   if (authToken) {
@@ -272,7 +297,7 @@ export const api = {
     formData.append('file', file);
     const headers: Record<string, string> = {};
     if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-    const response = await fetch(`${BASE_URL}/api/ads/ocr-upload`, {
+    const response = await fetch(getApiUrl('/api/ads/ocr-upload'), {
       method: 'POST',
       headers,
       credentials: 'include',
@@ -295,7 +320,7 @@ export const api = {
     formData.append('file', file);
     const headers: Record<string, string> = {};
     if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-    const response = await fetch(`${BASE_URL}/api/ads/bulk-analyze`, {
+    const response = await fetch(getApiUrl('/api/ads/bulk-analyze'), {
       method: 'POST',
       headers,
       credentials: 'include',
@@ -403,7 +428,7 @@ export const api = {
       disclaimer: string;
     }>('/api/reports/summary'),
 
-  getExportCsvUrl: () => `${BASE_URL}/api/reports/export`,
+  getExportCsvUrl: () => getApiUrl('/api/reports/export'),
 
   generateInvestigationReport: (payload: {
     scan_id?: string;
@@ -438,10 +463,10 @@ export const api = {
     request<InvestigationReport>(`/api/reports/${idOrReportId}`),
 
   getReportExportJsonUrl: (idOrReportId: string | number) =>
-    `${BASE_URL}/api/reports/${idOrReportId}/export/json`,
+    getApiUrl(`/api/reports/${idOrReportId}/export/json`),
 
   getReportExportHtmlUrl: (idOrReportId: string | number) =>
-    `${BASE_URL}/api/reports/${idOrReportId}/export/html`,
+    getApiUrl(`/api/reports/${idOrReportId}/export/html`),
 
   // Settings
   getSettings: () => request<SystemSettings>('/api/settings'),

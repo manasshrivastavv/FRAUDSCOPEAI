@@ -151,7 +151,7 @@ def register_user(payload: UserRegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=AuthResponse)
-def login_user(payload: UserLoginRequest, response: Response, db: Session = Depends(get_db)):
+def login_user(payload: UserLoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """
     Authenticates registered user credentials, establishes an authenticated session,
     and sets an HttpOnly session cookie alongside JWT token return.
@@ -195,13 +195,14 @@ def login_user(payload: UserLoginRequest, response: Response, db: Session = Depe
         "role": user.role
     })
 
-    # Set HttpOnly session cookie
+    # Set HttpOnly session cookie (use samesite=none and secure=True when accessed via HTTPS)
+    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     response.set_cookie(
         key="fraudscope_session",
         value=token,
         httponly=True,
-        samesite="lax",
-        secure=False,
+        samesite="none" if is_https else "lax",
+        secure=is_https,
         max_age=86400
     )
 
@@ -224,11 +225,17 @@ def login_user(payload: UserLoginRequest, response: Response, db: Session = Depe
 
 
 @router.post("/logout")
-def logout_user(response: Response, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def logout_user(request: Request, response: Response, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Invalidates current session and clears the HttpOnly cookie.
     """
-    response.delete_cookie(key="fraudscope_session", httponly=True, samesite="lax")
+    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    response.delete_cookie(
+        key="fraudscope_session",
+        httponly=True,
+        samesite="none" if is_https else "lax",
+        secure=is_https
+    )
 
     db.add(AuditEvent(
         actor=current_user.username,

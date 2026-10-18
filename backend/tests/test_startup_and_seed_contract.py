@@ -160,3 +160,56 @@ def test_health_endpoints_and_lifespan():
     data_root = resp_root.json()
     assert data_root["status"] == "online"
     assert data_root["database"] == "connected"
+
+
+def test_auth_login_route_and_duplicate_api_normalization():
+    """
+    Verifies that POST /api/auth/login exists, and that route aliases
+    and duplicate /api prefixes (/api/api/auth/login and /auth/login)
+    are correctly handled without 404s.
+    """
+    client = TestClient(app)
+
+    # 1. Standard POST /api/auth/login with valid demo investigator credentials
+    resp = client.post(
+        "/api/auth/login",
+        json={"username_or_email": "investigator", "password": "Password123!"}
+    )
+    assert resp.status_code == 200, f"Expected 200 on /api/auth/login, got {resp.status_code}: {resp.text}"
+    data = resp.json()
+    assert "access_token" in data
+    assert data["user"]["username"] == "investigator"
+
+    # 2. Resilient alias: POST /auth/login (without /api prefix)
+    resp_alias = client.post(
+        "/auth/login",
+        json={"username_or_email": "investigator", "password": "Password123!"}
+    )
+    assert resp_alias.status_code == 200, f"Expected 200 on /auth/login, got {resp_alias.status_code}: {resp_alias.text}"
+
+    # 3. Duplicate /api prefix normalization: POST /api/api/auth/login
+    resp_dup = client.post(
+        "/api/api/auth/login",
+        json={"username_or_email": "investigator", "password": "Password123!"}
+    )
+    assert resp_dup.status_code == 200, f"Expected 200 on /api/api/auth/login, got {resp_dup.status_code}: {resp_dup.text}"
+
+
+def test_cors_preflight_vercel_origin():
+    """
+    Verifies that preflight and CORS requests originating from Vercel deployments
+    (*.vercel.app) are permitted and return expected CORS headers.
+    """
+    client = TestClient(app)
+
+    headers = {
+        "Origin": "https://fraudscope-ai-production.vercel.app",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type,authorization"
+    }
+
+    resp = client.options("/api/auth/login", headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "https://fraudscope-ai-production.vercel.app"
+    assert resp.headers.get("access-control-allow-credentials") == "true"
+
