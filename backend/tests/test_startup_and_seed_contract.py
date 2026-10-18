@@ -213,3 +213,46 @@ def test_cors_preflight_vercel_origin():
     assert resp.headers.get("access-control-allow-origin") == "https://fraudscope-ai-production.vercel.app"
     assert resp.headers.get("access-control-allow-credentials") == "true"
 
+
+def test_cors_preflight_and_registration_exact_deployed_origin():
+    """
+    Verifies that preflight OPTIONS and registration POST from https://fraudscopeai.vercel.app
+    succeed without CORS errors or schema mismatches.
+    """
+    client = TestClient(app)
+
+    # 1. Test OPTIONS preflight on /api/auth/register
+    headers = {
+        "Origin": "https://fraudscopeai.vercel.app",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type"
+    }
+    resp_opt = client.options("/api/auth/register", headers=headers)
+    assert resp_opt.status_code == 200, f"Expected 200 on OPTIONS /api/auth/register, got {resp_opt.status_code}: {resp_opt.text}"
+    assert resp_opt.headers.get("access-control-allow-origin") == "https://fraudscopeai.vercel.app"
+    assert resp_opt.headers.get("access-control-allow-credentials") == "true"
+
+    # 2. Test registration schema with exact payload sent from frontend
+    import uuid
+    uniq_user = f"analyst_{uuid.uuid4().hex[:6]}"
+    reg_payload = {
+        "full_name": "Test Forensic Analyst",
+        "email": f"{uniq_user}@fraudscope.local",
+        "username": uniq_user,
+        "password": "Password123!",
+        "confirm_password": "Password123!",
+        "role": "Investigator"
+    }
+
+    resp_reg = client.post(
+        "/api/auth/register",
+        json=reg_payload,
+        headers={"Origin": "https://fraudscopeai.vercel.app"}
+    )
+    assert resp_reg.status_code == 201, f"Expected 201 on /api/auth/register, got {resp_reg.status_code}: {resp_reg.text}"
+    data = resp_reg.json()
+    assert data["username"] == uniq_user
+    assert data["email"] == f"{uniq_user}@fraudscope.local"
+    assert resp_reg.headers.get("access-control-allow-origin") == "https://fraudscopeai.vercel.app"
+
+

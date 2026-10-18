@@ -31,6 +31,8 @@ _default_cors = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://fraudscopeai.onrender.com",
+    "https://fraudscopeai.vercel.app",
+    "https://fraudscopeai.vercel.app/",
 ]
 if _raw_cors:
     for _o in _raw_cors.split(","):
